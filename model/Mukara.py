@@ -1,14 +1,14 @@
 import tensorflow as tf
 from config import MODEL  # Import hyperparameter settings
 
-from PixelEmbedding import PixelEmbedding
-from Clustering import LearnableClustering
-from Attention import SelfAttentionLayer, CrossAttentionLayer
-from TrafficPredictor import TrafficPredictor
+from model.PixelEmbedding import PixelEmbedding
+from model.Clustering import LearnableClustering
+from model.Attention import SelfAttentionLayer, CrossAttentionLayer
+from model.TrafficPredictor import TrafficPredictor
 
-class TrafficVolumeModel(tf.keras.Model):
+class Mukara(tf.keras.Model):
     def __init__(self):
-        super(TrafficVolumeModel, self).__init__()
+        super(Mukara, self).__init__()
         
         # Define model components
         self.pixel_embedding = PixelEmbedding()
@@ -26,11 +26,11 @@ class TrafficVolumeModel(tf.keras.Model):
         
         Returns:
             tuple: Predicted traffic volume (B, 1),
-                   Pixel embeddings (B, N, D),
+                   Pixel embeddings ([B], N, D), list of (N, D) with length B
                    Cluster embeddings (B, K, D),
                    Cluster assignments (B, N, K).
         """
-        # Compute pixel embeddings (B, N, D)
+        # Compute pixel embeddings ([B], N, D)
         o_pixel_embeddings, d_pixel_embeddings = self.pixel_embedding(sensor_ids)
         
         # Compute cluster embeddings dynamically for O and D (B, K, D) and (B, N, K)

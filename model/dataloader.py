@@ -55,7 +55,7 @@ def load_grid_cells():
         geopandas.GeoDataFrame: Grid cells in EPSG:27700.
     """
     grid_cells = gpd.read_file(os.path.join(PATH['grid']))
-    
+
     if grid_cells.crs is None:
         raise ValueError("Grid cells shapefile does not have a CRS defined.")
     
@@ -77,11 +77,7 @@ def load_gt():
     ids = data[:,0].astype(int).astype(str)
 
     # check isochrone data availability
-    available_ids_in_files = set()
-    all_files = [filename for filename in os.listdir(PATH["isochrones"]) if '2024' in filename]
-    for filename in all_files:
-        parts = filename.split('_')
-        available_ids_in_files.add(parts[1])
+    available_ids_in_files = {folder for folder in os.listdir(PATH["isochrones"]) if os.path.isdir(os.path.join(PATH["isochrones"], folder))}
 
     valid_ids = set(ids).intersection(available_ids_in_files)
 
@@ -113,7 +109,7 @@ def get_sensor_coordinates(sensor_id):
     """
     # Load sensor data
     sensors = pd.read_csv(os.path.join(PATH['data'], 'Sites.csv'))
-    sensor_data = sensors[sensors['Id'] == sensor_id]
+    sensor_data = sensors[sensors['Id'].astype(str) == sensor_id]
     
     if sensor_data.empty:
         raise ValueError(f"Sensor ID {sensor_id} not found in dataset.")
@@ -147,14 +143,9 @@ def get_polygon(sensor_id, region_type):
     else:
         raise ValueError("Invalid region_type. Use 'o' for origin or 'd' for destination.")
     
-    # Construct file paths for isochrones at different time intervals
-    relevant_files = [
-        os.path.join(PATH["isochrones"], f'{sensor_id}_{i}_{location_type}.json')
-        for i in DATA['isochrone_intervals']
-    ]
-    
     # Load the largest isochrone polygon (last file in the sorted list)
-    largest_isochrone_file = relevant_files[-1]
+    largest_isochrone_file = os.path.join(PATH["isochrones"], f"{sensor_id}", f"{sensor_id}_{DATA['isochrone_intervals'][-1]}_{location_type}.json")
+    
     if not os.path.exists(largest_isochrone_file):
         raise FileNotFoundError(f"Isochrone file not found: {largest_isochrone_file}")
     
@@ -168,12 +159,7 @@ def get_polygon(sensor_id, region_type):
     isochrone_polygon = shape(geojson_polygon)
     
     # Define transformation from WGS84 (EPSG:4326) to British National Grid (EPSG:27700)
-    project = partial(
-        pyproj.transform,
-        pyproj.Proj(init='epsg:4326'),  # Source projection (WGS84)
-        pyproj.Proj(init='epsg:27700')  # Target projection (British National Grid)
-    )
-    
-    transformed_polygon = transform(project, isochrone_polygon)
+    transformer = pyproj.Transformer.from_crs("epsg:4326", "epsg:27700", always_xy=True)
+    transformed_polygon = transform(transformer.transform, isochrone_polygon)
     
     return transformed_polygon

@@ -5,9 +5,9 @@ import logging
 import datetime
 import random
 
-from config import PATH, DATA, TRAINING, MODEL
+from config import PATH, DATA, TRAINING
 import importlib
-from model import Mukara
+from model.Mukara import Mukara
 from model.dataloader import load_gt
 import model.utils as utils
 
@@ -37,6 +37,7 @@ def train_model(mukara, id_to_gt, scaler, train_ids, test_ids):
     train_dataset = train_dataset.shuffle(len(train_ids)).batch(TRAINING['batch_size'])
     
     for epoch in range(TRAINING['epoch']):
+        batch = 0
         for batch_ids in train_dataset:
             with tf.GradientTape() as tape:
                 batch_pred, pixel_embeddings, cluster_embeddings, cluster_assignments = mukara(batch_ids) 
@@ -51,12 +52,16 @@ def train_model(mukara, id_to_gt, scaler, train_ids, test_ids):
             grads = tape.gradient(loss, mukara.trainable_variables)
             grads = [tf.clip_by_value(grad, -TRAINING['clip_gradient'], TRAINING['clip_gradient']) for grad in grads]
             optimizer.apply_gradients(zip(grads, mukara.trainable_variables))
+
+            batch += 1
+            print(f"Training complete for epoch {epoch}, batch {batch}.")
             
-        train_loss = evaluate_model(mukara, scaler, train_ids)
-        test_loss = evaluate_model(mukara, scaler, test_ids)
-        
-        logging.info(f"Epoch {epoch}, Train Loss: {format_loss(train_loss)}")
-        logging.info(f"Epoch {epoch}, Valid Loss: {format_loss(test_loss)}")
+            if batch % 10 == 0:
+                train_loss = evaluate_model(mukara, scaler, train_ids)
+                test_loss = evaluate_model(mukara, scaler, test_ids)
+                
+                logging.info(f"Epoch {epoch}, Batch {batch}, Train Loss: {format_loss(train_loss)}")
+                logging.info(f"Epoch {epoch}, Batch {batch}, Valid Loss: {format_loss(test_loss)}")
 
 def compute_loss(gt, pred, pixel_embeddings, cluster_embeddings, cluster_assignments, scaler, traffic_loss_function):
     """
