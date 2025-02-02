@@ -17,23 +17,23 @@ class Mukara(tf.keras.Model):
         self.cross_attention_layers = [CrossAttentionLayer() for _ in range(MODEL['num_attention_layers'])]
         self.traffic_predictor = TrafficPredictor()
         
-    def call(self, sensor_ids):
+    def call(self, sensor_id):
         """
         Forward pass of the Traffic Volume Prediction Model.
         
         Args:
-            sensor_ids (tf.Tensor): (B,) Batch of sensor identifiers.
+            sensor_id (str): Single sensor identifier.
         
         Returns:
-            tuple: Predicted traffic volume (B, 1),
-                   Pixel embeddings ([B], N, D), list of (N, D) with length B
-                   Cluster embeddings (B, K, D),
-                   Cluster assignments (B, N, K).
+            tuple: Predicted traffic volume (1,),
+                   Pixel embeddings (N, D)
+                   Cluster embeddings (K, D),
+                   Cluster assignments (N, K).
         """
-        # Compute pixel embeddings ([B], N, D)
-        o_pixel_embeddings, d_pixel_embeddings = self.pixel_embedding(sensor_ids)
+        # Compute pixel embeddings (N, D)
+        o_pixel_embeddings, d_pixel_embeddings = self.pixel_embedding(sensor_id)
         
-        # Compute cluster embeddings dynamically for O and D (B, K, D) and (B, N, K)
+        # Compute cluster embeddings dynamically for O and D (K, D) and (N, K)
         o_cluster_embeddings, o_cluster_assignments = self.cluster_module(o_pixel_embeddings)
         d_cluster_embeddings, d_cluster_assignments = self.cluster_module(d_pixel_embeddings)
         
@@ -44,7 +44,10 @@ class Mukara(tf.keras.Model):
             o_cluster_embeddings = cross_layer(o_cluster_embeddings, d_cluster_embeddings)  # Cross-attention
             d_cluster_embeddings = cross_layer(d_cluster_embeddings, o_cluster_embeddings)  # Cross-attention
         
-        # Predict traffic volume using pooled O and D cluster embeddings (B, 1)
+        o_cluster_embeddings = tf.squeeze(o_cluster_embeddings) # from (1, K D) to (K, D)
+        d_cluster_embeddings = tf.squeeze(d_cluster_embeddings)
+
+        # Predict traffic volume using pooled O and D cluster embeddings (1,)
         traffic_volume = self.traffic_predictor(o_cluster_embeddings, d_cluster_embeddings)
         
         return traffic_volume, (o_pixel_embeddings, d_pixel_embeddings), (o_cluster_embeddings, d_cluster_embeddings), (o_cluster_assignments, d_cluster_assignments)

@@ -61,18 +61,18 @@ def compute_compactness_loss(pixel_embeddings, cluster_embeddings, cluster_assig
     Encourages pixel embeddings within the same cluster to be similar.
     
     Args:
-        pixel_embeddings (tf.Tensor): (B, N, D) pixel embeddings.
-        cluster_embeddings (tf.Tensor): (B, K, D) cluster embeddings.
-        cluster_assignments (tf.Tensor): (B, N, K) cluster assignment weights.
+        pixel_embeddings (tf.Tensor): (N, D) pixel embeddings for a single sensor.
+        cluster_embeddings (tf.Tensor): (K, D) cluster embeddings.
+        cluster_assignments (tf.Tensor): (N, K) cluster assignment weights.
     
     Returns:
-        tf.Tensor: (B,) Compactness loss per batch.
+        tf.Tensor: Scalar compactness loss.
     """
-    expanded_pixel_embeddings = tf.expand_dims(pixel_embeddings, 2)  # (B, N, 1, D)
-    expanded_cluster_centroids = tf.expand_dims(cluster_embeddings, 1)  # (B, 1, K, D)
-    squared_differences = tf.square(expanded_pixel_embeddings - expanded_cluster_centroids)  # (B, N, K, D)
-    weighted_distances = tf.reduce_sum(cluster_assignments[..., None] * squared_differences, axis=(1, 2, 3))
-    return tf.reduce_mean(weighted_distances, axis=0)  # Averaged per batch
+    expanded_pixel_embeddings = tf.expand_dims(pixel_embeddings, 1)  # (N, 1, D)
+    expanded_cluster_centroids = tf.expand_dims(cluster_embeddings, 0)  # (1, K, D)
+    squared_differences = tf.square(expanded_pixel_embeddings - expanded_cluster_centroids)  # (N, K, D)
+    weighted_distances = tf.reduce_sum(tf.expand_dims(cluster_assignments, axis=-1) * squared_differences, axis=(0, 1))  # (D,)
+    return tf.reduce_mean(weighted_distances)  # Scalar loss
 
 
 def compute_separation_loss(cluster_embeddings):
@@ -80,28 +80,27 @@ def compute_separation_loss(cluster_embeddings):
     Encourages cluster embeddings to be distinct.
     
     Args:
-        cluster_embeddings (tf.Tensor): (B, K, D) cluster embeddings.
+        cluster_embeddings (tf.Tensor): (K, D) cluster embeddings for a single sensor.
     
     Returns:
-        tf.Tensor: (B,) Separation loss per batch.
+        tf.Tensor: Scalar separation loss.
     """
-    normalized_embeddings = tf.nn.l2_normalize(cluster_embeddings, axis=-1)  # (B, K, D)
-    cluster_similarity = tf.matmul(normalized_embeddings, normalized_embeddings, transpose_b=True)  # (B, K, K)
-    identity_matrix = tf.eye(tf.shape(cluster_similarity)[1], batch_shape=[tf.shape(cluster_similarity)[0]])
+    # cluster_embeddings = tf.nn.l2_normalize(cluster_embeddings, axis=-1)  # (K, D)
+    cluster_similarity = tf.matmul(cluster_embeddings, cluster_embeddings, transpose_b=True)  # (K, K)
+    identity_matrix = tf.eye(tf.shape(cluster_similarity)[0])
     off_diagonal_similarity = cluster_similarity * (1 - identity_matrix)
-    return tf.reduce_mean(off_diagonal_similarity, axis=[1, 2])  # Averaged per batch
-
+    return tf.reduce_mean(off_diagonal_similarity)  # Scalar loss
 
 def compute_balance_loss(cluster_assignments):
     """
-    Ensures that clusters are used evenly across a batch.
+    Ensures that clusters are used evenly.
     
     Args:
-        cluster_assignments (tf.Tensor): (B, N, K) cluster assignment probabilities.
+        cluster_assignments (tf.Tensor): (N, K) cluster assignment probabilities for a single sensor.
     
     Returns:
-        tf.Tensor: (B,) Balance loss per batch.
+        tf.Tensor: Scalar balance loss.
     """
-    cluster_usage = tf.reduce_sum(cluster_assignments, axis=1)  # (B, K)
-    mean_usage = tf.reduce_mean(cluster_usage, axis=1, keepdims=True)  # (B, 1)
-    return tf.reduce_mean(tf.square(cluster_usage - mean_usage), axis=1)  # Averaged per batch
+    cluster_usage = tf.reduce_sum(cluster_assignments, axis=0)  # (K,)
+    mean_usage = tf.reduce_mean(cluster_usage, keepdims=True)  # (1,)
+    return tf.reduce_mean(tf.square(cluster_usage - mean_usage))  # Scalar loss

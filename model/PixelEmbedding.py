@@ -20,88 +20,85 @@ class PixelEmbedding(tf.keras.layers.Layer):
         # MLP for absolute 2D positional encoding
         self.position_mlp = tf.keras.layers.Dense(MODEL['embedding_dim'], activation='relu')
 
-    def call(self, sensor_ids):
+    def call(self, sensor_id):
         """
-        Compute final pixel embeddings for a batch of sensors by combining feature, isochrone, and positional encodings.
+        Compute final pixel embeddings for one sensor by combining feature, isochrone, and positional encodings.
         Load cache if already computed.
         
         Args:
-            sensor_ids (tf.Tensor): (B,) Batch of sensor identifiers.
+            sensor_id (str): Sensor identifier.
         
         Returns:
-            list of tf.Tensor: O pixel embeddings ([B], N, D)
-            list of tf.Tensor: D pixel embeddings ([B], N, D)
+            tuple:
+                tf.Tensor: O pixel embeddings (N, D)
+                tf.Tensor: D pixel embeddings (N, D)
         """
-        batch_o_embeddings, batch_d_embeddings = [], []
+        sensor_cache_dir = os.path.join(PATH['cache'], sensor_id)
         
-        for sensor_id in sensor_ids:
-            sensor_id = sensor_id.numpy().decode('utf-8')
-            sensor_cache_dir = os.path.join(PATH['cache'], sensor_id)
-            
-            if not os.path.exists(sensor_cache_dir):
-                os.makedirs(sensor_cache_dir)
-            
-            index_path = os.path.join(sensor_cache_dir, "index.json")
-            feature_cache = os.path.join(sensor_cache_dir, "features.npy")
-            position_cache = os.path.join(sensor_cache_dir, "position.npy")
-            o_isochrone_cache = os.path.join(sensor_cache_dir, "isochrone_o.npy")
-            d_isochrone_cache = os.path.join(sensor_cache_dir, "isochrone_d.npy")
-            
-            if os.path.exists(index_path):
-                with open(index_path, 'r') as f:
-                    cache_data = json.load(f)
-                o_indices = cache_data['o_indices']
-                d_indices = cache_data['d_indices']
-                
-                raw_features = np.load(feature_cache)
-                raw_absolute_position_encoding = np.load(position_cache)
-                raw_isochrone_encoding_o = np.load(o_isochrone_cache)
-                raw_isochrone_encoding_d = np.load(d_isochrone_cache)
-            else:
-                print(f"Computing cache for sensor {sensor_id}.")
-                o_polygon = get_polygon(sensor_id, 'o')
-                d_polygon = get_polygon(sensor_id, 'd')
-                
-                o_indices, d_indices, union_indices = self.compute_pixel_indices(o_polygon, d_polygon)
-                raw_features = tf.gather(tf.reshape(self.grid_features, [-1, self.C]), union_indices).numpy()  # (N, C)
-                
-                sensor_coords = get_sensor_coordinates(sensor_id)
-                raw_absolute_position_encoding = self.compute_raw_absolute_position_encoding(sensor_coords, union_indices)
-                
-                raw_isochrone_encoding_o = self.compute_raw_isochrone_encoding(sensor_id, o_indices, 'o')
-                raw_isochrone_encoding_d = self.compute_raw_isochrone_encoding(sensor_id, d_indices, 'd')
-                
-                np.save(feature_cache, raw_features)
-                np.save(position_cache, raw_absolute_position_encoding)
-                np.save(o_isochrone_cache, raw_isochrone_encoding_o)
-                np.save(d_isochrone_cache, raw_isochrone_encoding_d)
-                
-                cache_data = {'o_indices': o_indices, 'd_indices': d_indices}
-                with open(index_path, 'w') as f:
-                    json.dump(cache_data, f)
-            
-            feature_embedding = self.feature_mlp(tf.convert_to_tensor(raw_features, dtype=tf.float32))
-            absolute_position_embedding = self.position_mlp(tf.convert_to_tensor(raw_absolute_position_encoding, dtype=tf.float32))
-            
-            o_positions = [union_indices.index(i) for i in o_indices]
-            d_positions = [union_indices.index(i) for i in d_indices]
-            
-            o_feature_embedding = tf.gather(feature_embedding, o_positions)
-            d_feature_embedding = tf.gather(feature_embedding, d_positions)
-            
-            o_absolute_position_embedding = tf.gather(absolute_position_embedding, o_positions)
-            d_absolute_position_embedding = tf.gather(absolute_position_embedding, d_positions)
-            
-            o_isochrone_embedding = tf.convert_to_tensor(raw_isochrone_encoding_o, dtype=tf.float32)
-            d_isochrone_embedding = tf.convert_to_tensor(raw_isochrone_encoding_d, dtype=tf.float32)
-            
-            o_pixel_embeddings = o_feature_embedding + o_isochrone_embedding + o_absolute_position_embedding
-            d_pixel_embeddings = d_feature_embedding + d_isochrone_embedding + d_absolute_position_embedding
-            
-            batch_o_embeddings.append(o_pixel_embeddings)
-            batch_d_embeddings.append(d_pixel_embeddings)
+        if not os.path.exists(sensor_cache_dir):
+            os.makedirs(sensor_cache_dir)
         
-        return batch_o_embeddings, batch_d_embeddings
+        index_path = os.path.join(sensor_cache_dir, "index.json")
+        feature_cache = os.path.join(sensor_cache_dir, "features.npy")
+        position_cache = os.path.join(sensor_cache_dir, "position.npy")
+        o_isochrone_cache = os.path.join(sensor_cache_dir, "isochrone_o.npy")
+        d_isochrone_cache = os.path.join(sensor_cache_dir, "isochrone_d.npy")
+        
+        if os.path.exists(index_path):
+            with open(index_path, 'r') as f:
+                cache_data = json.load(f)
+            o_indices = cache_data['o_indices']
+            d_indices = cache_data['d_indices']
+            union_indices = list(set(o_indices) | set(d_indices))
+            
+            raw_features = np.load(feature_cache)
+            raw_absolute_position_encoding = np.load(position_cache)
+            raw_isochrone_encoding_o = np.load(o_isochrone_cache)
+            raw_isochrone_encoding_d = np.load(d_isochrone_cache)
+        else:
+            print(f"Computing cache for sensor {sensor_id}.")
+            o_polygon = get_polygon(sensor_id, 'o')
+            d_polygon = get_polygon(sensor_id, 'd')
+            
+            o_indices, d_indices, union_indices = self.compute_pixel_indices(o_polygon, d_polygon)
+            raw_features = tf.gather(tf.reshape(self.grid_features, [-1, self.C]), union_indices).numpy()  # (N, C)
+            
+            sensor_coords = get_sensor_coordinates(sensor_id)
+            raw_absolute_position_encoding = self.compute_raw_absolute_position_encoding(sensor_coords, union_indices)
+            
+            raw_isochrone_encoding_o = self.compute_raw_isochrone_encoding(sensor_id, o_indices, 'o')
+            raw_isochrone_encoding_d = self.compute_raw_isochrone_encoding(sensor_id, d_indices, 'd')
+            
+            np.save(feature_cache, raw_features)
+            np.save(position_cache, raw_absolute_position_encoding)
+            np.save(o_isochrone_cache, raw_isochrone_encoding_o)
+            np.save(d_isochrone_cache, raw_isochrone_encoding_d)
+            
+            cache_data = {'o_indices': o_indices, 'd_indices': d_indices}
+            with open(index_path, 'w') as f:
+                json.dump(cache_data, f)
+        
+        feature_embedding = self.feature_mlp(tf.convert_to_tensor(raw_features, dtype=tf.float32))
+        absolute_position_embedding = self.position_mlp(tf.convert_to_tensor(raw_absolute_position_encoding, dtype=tf.float32))
+        
+        o_positions = [union_indices.index(i) for i in o_indices]
+        d_positions = [union_indices.index(i) for i in d_indices]
+        
+        o_feature_embedding = tf.gather(feature_embedding, o_positions)
+        d_feature_embedding = tf.gather(feature_embedding, d_positions)
+        
+        o_absolute_position_embedding = tf.gather(absolute_position_embedding, o_positions)
+        d_absolute_position_embedding = tf.gather(absolute_position_embedding, d_positions)
+        
+        o_isochrone_embedding = tf.convert_to_tensor(raw_isochrone_encoding_o, dtype=tf.float32)
+        d_isochrone_embedding = tf.convert_to_tensor(raw_isochrone_encoding_d, dtype=tf.float32)
+        
+        o_pixel_embeddings = o_feature_embedding + o_isochrone_embedding + o_absolute_position_embedding
+        d_pixel_embeddings = d_feature_embedding + d_isochrone_embedding + d_absolute_position_embedding
+        
+        assert o_pixel_embeddings.shape == (len(o_indices), MODEL['embedding_dim']), "Shape mismatch!"
+
+        return o_pixel_embeddings, d_pixel_embeddings
 
     def compute_pixel_indices(self, O_polygon, D_polygon):
         """

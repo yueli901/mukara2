@@ -77,7 +77,16 @@ def load_gt():
     ids = data[:,0].astype(int).astype(str)
 
     # check isochrone data availability
-    available_ids_in_files = {folder for folder in os.listdir(PATH["isochrones"]) if os.path.isdir(os.path.join(PATH["isochrones"], folder))}
+    available_ids_in_files = set()
+    for folder in os.listdir(PATH["isochrones"]):
+        folder_path = os.path.join(PATH["isochrones"], folder)
+        required_files = {f"{folder}_{t}_start.json" for t in DATA['isochrone_intervals']} | \
+                        {f"{folder}_{t}_destination.json" for t in DATA['isochrone_intervals']}
+        
+        existing_files = set(os.listdir(folder_path))
+        
+        if required_files.issubset(existing_files):
+            available_ids_in_files.add(folder)
 
     valid_ids = set(ids).intersection(available_ids_in_files)
 

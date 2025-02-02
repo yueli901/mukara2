@@ -6,7 +6,6 @@ import datetime
 import random
 
 from config import PATH, DATA, TRAINING
-import importlib
 from model.Mukara import Mukara
 from model.dataloader import load_gt
 import model.utils as utils
@@ -17,7 +16,7 @@ tf.random.set_seed(TRAINING['seed'])
 random.seed(TRAINING['seed'])
 
 # Disable GPUs if required
-tf.config.set_visible_devices([], 'GPU')
+# tf.config.set_visible_devices([], 'GPU')
 
 # Configure logging
 logging.basicConfig(
@@ -29,23 +28,22 @@ logging.basicConfig(
 
 def train_model(mukara, id_to_gt, scaler, train_ids, test_ids):
     """
-    Training loop for the Mukara model with batch learning and multiple loss functions.
+    Training loop for the Mukara model without batch learning.
+    Evaluates the model every 50 sensors trained.
     """
     optimizer = tf.keras.optimizers.Adam(learning_rate=TRAINING['lr'])
     
-    train_dataset = tf.data.Dataset.from_tensor_slices(train_ids)
-    train_dataset = train_dataset.shuffle(len(train_ids)).batch(TRAINING['batch_size'])
-    
     for epoch in range(TRAINING['epoch']):
-        batch = 0
-        for batch_ids in train_dataset:
+        random.shuffle(train_ids)
+        
+        for i, sensor_id in enumerate(train_ids, start=1):
             with tf.GradientTape() as tape:
-                batch_pred, pixel_embeddings, cluster_embeddings, cluster_assignments = mukara(batch_ids) 
-                batch_gt = tf.convert_to_tensor([id_to_gt[batch_id.numpy()] for batch_id in batch_ids], dtype=tf.float32)
+                pred, pixel_embeddings, cluster_embeddings, cluster_assignments = mukara(sensor_id) 
+                gt = tf.convert_to_tensor(id_to_gt[sensor_id], dtype=tf.float32)
                 
                 # Compute total loss with multi-loss function
                 loss, _ = compute_loss(
-                    batch_gt, batch_pred, pixel_embeddings, cluster_embeddings, cluster_assignments, scaler, TRAINING['loss_function']
+                    gt, pred, pixel_embeddings, cluster_embeddings, cluster_assignments, scaler, TRAINING['loss_function']
                 )
             
             # Compute and apply gradients
@@ -53,15 +51,16 @@ def train_model(mukara, id_to_gt, scaler, train_ids, test_ids):
             grads = [tf.clip_by_value(grad, -TRAINING['clip_gradient'], TRAINING['clip_gradient']) for grad in grads]
             optimizer.apply_gradients(zip(grads, mukara.trainable_variables))
 
-            batch += 1
-            print(f"Training complete for epoch {epoch}, batch {batch}.")
+            print(f"Training complete for epoch {epoch}, sensor {i}/{len(train_ids)}.")
             
-            if batch % 10 == 0:
+            # Evaluate model every 50 sensors
+            if i % 100 == 0:
                 train_loss = evaluate_model(mukara, scaler, train_ids)
                 test_loss = evaluate_model(mukara, scaler, test_ids)
                 
-                logging.info(f"Epoch {epoch}, Batch {batch}, Train Loss: {format_loss(train_loss)}")
-                logging.info(f"Epoch {epoch}, Batch {batch}, Valid Loss: {format_loss(test_loss)}")
+                logging.info(f"Epoch {epoch}, Sensor {i}: Train Loss: {format_loss(train_loss)}")
+                logging.info(f"Epoch {epoch}, Sensor {i}: Valid Loss: {format_loss(test_loss)}")
+
 
 def compute_loss(gt, pred, pixel_embeddings, cluster_embeddings, cluster_assignments, scaler, traffic_loss_function):
     """
@@ -95,26 +94,57 @@ def compute_loss(gt, pred, pixel_embeddings, cluster_embeddings, cluster_assignm
         TRAINING['lambda_balance'] * balance_loss
     )
     
-    return total_loss, traffic_loss
+    return total_loss, (traffic_loss, compactness_loss, separation_loss, balance_loss)
 
 def evaluate_model(mukara, scaler, ids):
     """
-    Evaluates the model on a subset of IDs.
+    Evaluates the model on a subset of sensor IDs and logs all loss components.
     """
     sampled_ids = random.sample(ids, TRAINING['eval_samples'])
-    loss = {metric: 0.0 for metric in TRAINING['eval_metrics']}
-    pred, cluster_assignments, cluster_similarity, cluster_usage = mukara(sampled_ids)
-    gt = tf.convert_to_tensor([id_to_gt[_id] for _id in sampled_ids], dtype=tf.float32)
-    
+    loss = {}
+
+    # Initialize loss dictionary
+    loss["Total Loss"] = 0.0  # Main training loss
     for metric in TRAINING['eval_metrics']:
-        _, loss[metric] = compute_loss(gt, pred, cluster_assignments, cluster_similarity, cluster_usage, scaler, metric)
+        loss[f"Traffic ({metric})"] = 0.0  # Store different traffic loss evaluations
+
+    loss['Compactness'] = 0.0
+    loss['Separation'] = 0.0
+    loss['Balance'] = 0.0
+
+    for sensor_id in sampled_ids:
+        pred, pixel_embeddings, cluster_embeddings, cluster_assignments = mukara(sensor_id)
+        gt = tf.convert_to_tensor(id_to_gt[sensor_id], dtype=tf.float32)
+
+        # Compute total loss using the main training loss function
+        total_loss, (traffic_loss, compactness_loss, separation_loss, balance_loss) = compute_loss(
+            gt, pred, pixel_embeddings, cluster_embeddings, cluster_assignments, scaler, TRAINING['loss_function']
+        )
+        
+        loss["Total Loss"] += total_loss.numpy()
+        loss["Compactness"] += compactness_loss.numpy()
+        loss["Separation"] += separation_loss.numpy()
+        loss["Balance"] += balance_loss.numpy()
+
+        # Compute traffic loss using different evaluation metrics
+        for metric in TRAINING['eval_metrics']:
+            _, (traffic_loss, _, _, _) = compute_loss(
+                gt, pred, pixel_embeddings, cluster_embeddings, cluster_assignments, scaler, metric
+            )
+            loss[f"Traffic ({metric})"] += traffic_loss.numpy()
+
+    # Normalize by the number of evaluated samples
+    num_samples = len(sampled_ids)
+    for key in loss.keys():
+        loss[key] /= num_samples
+
     return loss
 
 def format_loss(loss_dict):
     """
-    Formats the loss dictionary into a readable string.
+    Formats the loss dictionary into a readable string with .3f precision.
     """
-    return ", ".join([f"{key}: {value:.2f}" for key, value in loss_dict.items()])
+    return ", ".join([f"{key}: {value:.3f}" for key, value in loss_dict.items()])
 
 if __name__ == '__main__':
     # Timestamp for model name

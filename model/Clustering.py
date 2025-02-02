@@ -41,29 +41,26 @@ class LearnableClustering(tf.keras.layers.Layer):
             tf.Tensor: (K, D) updated cluster embeddings.
         """
         weighted_sum = tf.matmul(cluster_assignments, pixel_embeddings, transpose_a=True)  # (K, D)
-        sum_weights = tf.reduce_sum(cluster_assignments, axis=0, keepdims=True)  # (1, K)
-        return weighted_sum / (sum_weights + 1e-6)  # (K, D) - Avoid division by zero
+        sum_weights = tf.reduce_sum(cluster_assignments, axis=0)  # (K,)
+        sum_weights = tf.expand_dims(sum_weights, axis=-1)  # (K, 1)
+        sum_weights = tf.maximum(sum_weights, 1e-6)  # Prevent division by zero
+        return weighted_sum / (sum_weights)
     
-    def call(self, batch_pixel_embeddings):
+    def call(self, pixel_embeddings):
         """
-        Process **multiple sensors** by looping through them.
+        Produce cluster embeddings based on O/D pixel embeddings of one sensor.
 
         Args:
-            batch_pixel_embeddings (list of tf.Tensor): ([B], N, D)
+            pixel_embeddings (tf.Tensor): (N, D) Pixel embeddings for one sensor.
 
         Returns:
             tuple: 
-                - list of ([B], K, D) cluster embeddings, one per sensor.
-                - list of ([B], N, K) cluster assignments, one per sensor.
+                - tf.Tensor: (K, D) cluster embeddings.
+                - tf.Tensor: (N, K) cluster assignments.
         """
-        batch_cluster_embeddings = []
-        batch_cluster_assignments = []
+        cluster_assignments = self.compute_cluster_assignments(pixel_embeddings)  # (N, K)
+        cluster_embeddings = self.compute_cluster_embeddings(pixel_embeddings, cluster_assignments)  # (K, D)
         
-        for pixel_embeddings in batch_pixel_embeddings:  # Process each sensor independently
-            cluster_assignments = self.compute_cluster_assignments(pixel_embeddings)  # (N, K)
-            cluster_embeddings = self.compute_cluster_embeddings(pixel_embeddings, cluster_assignments)  # (K, D)
+        assert cluster_embeddings.shape == (MODEL['num_clusters'], MODEL['embedding_dim']), "Shape mismatch!"
 
-            batch_cluster_embeddings.append(cluster_embeddings)
-            batch_cluster_assignments.append(cluster_assignments)
-
-        return batch_cluster_embeddings, batch_cluster_assignments
+        return cluster_embeddings, cluster_assignments

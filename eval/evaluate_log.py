@@ -5,49 +5,81 @@ import numpy as np
 
 def extract_metrics(log_path):
     """
-    A function to read the log file and extract metrics
+    Reads the log file and extracts training and validation metrics.
     """
     # Initialize empty lists to store data
     epochs = []
-    steps = []
+    sensors = []
+    train_total_loss = []
     train_geh = []
     train_mae = []
+    train_compactness = []
+    train_separation = []
+    train_balance = []
+    
+    valid_total_loss = []
     valid_geh = []
     valid_mae = []
+    valid_compactness = []
+    valid_separation = []
+    valid_balance = []
 
-    # Regular expressions to capture the data from the log
-    epoch_step_pattern = re.compile(r'Epoch (\d+), Step (\d+)')
-    train_pattern = re.compile(r'Train Loss: MGEH: ([\d.]+|nan), MAE: ([\d.]+|nan)')
-    valid_pattern = re.compile(r'Valid Loss: MGEH: ([\d.]+|nan), MAE: ([\d.]+|nan)')
+    # Regular expressions to capture relevant data from logs
+    epoch_sensor_pattern = re.compile(r'Epoch (\d+), Sensor (\d+)')
+    train_pattern = re.compile(
+        r'Train Loss: Total Loss: ([\d.]+), Traffic \(MGEH\): ([\d.]+), Traffic \(MAE\): ([\d.]+), '
+        r'Compactness: ([\d.]+), Separation: ([\d.]+), Balance: ([\d.]+)'
+    )
+    valid_pattern = re.compile(
+        r'Valid Loss: Total Loss: ([\d.]+), Traffic \(MGEH\): ([\d.]+), Traffic \(MAE\): ([\d.]+), '
+        r'Compactness: ([\d.]+), Separation: ([\d.]+), Balance: ([\d.]+)'
+    )
 
-    # Reading the log file
+    # Read the log file
     with open(log_path, 'r') as f:
         for line in f:
+            epoch_sensor_match = epoch_sensor_pattern.search(line)
             train_match = train_pattern.search(line)
             valid_match = valid_pattern.search(line)
-            
-            if train_match:
-                train_geh.append(float(train_match.group(1)) if train_match.group(1) != 'nan' else np.nan)
-                train_mae.append(float(train_match.group(2)) if train_match.group(2) != 'nan' else np.nan)
 
-                epoch_step_match = epoch_step_pattern.search(line)
-                epoch = int(epoch_step_match.group(1))
-                step = int(epoch_step_match.group(2))
+            if train_match:
+                epoch = int(epoch_sensor_match.group(1))
+                sensor = int(epoch_sensor_match.group(2))
                 epochs.append(epoch)
-                steps.append(step)
-            
+                sensors.append(sensor)
+                
+                train_total_loss.append(float(train_match.group(1)))
+                train_geh.append(float(train_match.group(2)))
+                train_mae.append(float(train_match.group(3)))
+                train_compactness.append(float(train_match.group(4)))
+                train_separation.append(float(train_match.group(5)))
+                train_balance.append(float(train_match.group(6)))
+
             if valid_match:
-                valid_geh.append(float(valid_match.group(1)) if valid_match.group(1) != 'nan' else np.nan)
-                valid_mae.append(float(valid_match.group(2)) if valid_match.group(2) != 'nan' else np.nan)
+                valid_total_loss.append(float(valid_match.group(1)))
+                valid_geh.append(float(valid_match.group(2)))
+                valid_mae.append(float(valid_match.group(3)))
+                valid_compactness.append(float(valid_match.group(4)))
+                valid_separation.append(float(valid_match.group(5)))
+                valid_balance.append(float(valid_match.group(6)))
 
     # Create a DataFrame
     df = pd.DataFrame({
         'epoch': epochs,
-        'step': steps,
+        'sensor': sensors,
+        'train_total_loss': train_total_loss,
         'train_geh': train_geh,
         'train_mae': train_mae,
+        'train_compactness': train_compactness,
+        'train_separation': train_separation,
+        'train_balance': train_balance,
+        'valid_total_loss': valid_total_loss,
         'valid_geh': valid_geh,
-        'valid_mae': valid_mae
+        'valid_mae': valid_mae,
+        'valid_compactness': valid_compactness,
+        'valid_separation': valid_separation,
+        'valid_balance': valid_balance
     })
+
 
     return df

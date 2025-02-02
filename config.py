@@ -3,7 +3,7 @@ PATH = {
     'data': 'data',
     'grid': 'data/population_and_employment/grid_1km_653_573/grid_cells.shp',
     'isochrones': 'data/isochrones/isochrones_json',
-    'cache': 'data/sensor_cache',
+    'cache': 'data/sensor_cache_128',
     'population_and_employment': 'data/population_and_employment/population_and_employment.h5',
     'landuse_and_poi': 'data/landuse_poi/landuse_and_poi-230101.h5',
     'ground_truth': 'data/traffic_volume/traffic_volume_summary_2022.h5',
@@ -25,14 +25,13 @@ MODEL = {
     'num_attention_layers': 2,
     'num_attention_heads': 3,
     'pooling_method': 'attention',
-    # 'top_k_attention': 100,
     }
 
 TRAINING = {
-    'lambda_traffic': 1.0,
-    'lambda_compact': 0.1,
-    'lambda_separate': 0.01,
-    'lambda_balance': 0.001,
+    'lambda_traffic': 1,
+    'lambda_compact': 0,
+    'lambda_separate': 0,
+    'lambda_balance': 0,
 
     'seed': 4,
     'lr': 1e-3,
