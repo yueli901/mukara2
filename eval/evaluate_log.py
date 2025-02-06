@@ -12,14 +12,12 @@ def extract_metrics(log_path):
     sensors = []
     train_total_loss = []
     train_geh = []
-    train_mae = []
     train_compactness = []
     train_separation = []
     train_balance = []
     
     valid_total_loss = []
     valid_geh = []
-    valid_mae = []
     valid_compactness = []
     valid_separation = []
     valid_balance = []
@@ -27,11 +25,11 @@ def extract_metrics(log_path):
     # Regular expressions to capture relevant data from logs
     epoch_sensor_pattern = re.compile(r'Epoch (\d+), Sensor (\d+)')
     train_pattern = re.compile(
-        r'Train Loss: Total Loss: ([\d.]+), Traffic \(MGEH\): ([\d.]+), Traffic \(MAE\): ([\d.]+), '
+        r'Train Loss: Total Loss: ([\d.]+), Traffic \(MGEH\): ([\d.]+), '
         r'Compactness: ([\d.]+), Separation: ([\d.]+), Balance: ([\d.]+)'
     )
     valid_pattern = re.compile(
-        r'Valid Loss: Total Loss: ([\d.]+), Traffic \(MGEH\): ([\d.]+), Traffic \(MAE\): ([\d.]+), '
+        r'Valid Loss: Total Loss: ([\d.]+), Traffic \(MGEH\): ([\d.]+), '
         r'Compactness: ([\d.]+), Separation: ([\d.]+), Balance: ([\d.]+)'
     )
 
@@ -47,21 +45,19 @@ def extract_metrics(log_path):
                 sensor = int(epoch_sensor_match.group(2))
                 epochs.append(epoch)
                 sensors.append(sensor)
-                
+
                 train_total_loss.append(float(train_match.group(1)))
                 train_geh.append(float(train_match.group(2)))
-                train_mae.append(float(train_match.group(3)))
-                train_compactness.append(float(train_match.group(4)))
-                train_separation.append(float(train_match.group(5)))
-                train_balance.append(float(train_match.group(6)))
+                train_compactness.append(float(train_match.group(3)))
+                train_separation.append(float(train_match.group(4)))
+                train_balance.append(float(train_match.group(5)))
 
             if valid_match:
                 valid_total_loss.append(float(valid_match.group(1)))
                 valid_geh.append(float(valid_match.group(2)))
-                valid_mae.append(float(valid_match.group(3)))
-                valid_compactness.append(float(valid_match.group(4)))
-                valid_separation.append(float(valid_match.group(5)))
-                valid_balance.append(float(valid_match.group(6)))
+                valid_compactness.append(float(valid_match.group(3)))
+                valid_separation.append(float(valid_match.group(4)))
+                valid_balance.append(float(valid_match.group(5)))
 
     # Create a DataFrame
     df = pd.DataFrame({
@@ -69,13 +65,11 @@ def extract_metrics(log_path):
         'sensor': sensors,
         'train_total_loss': train_total_loss,
         'train_geh': train_geh,
-        'train_mae': train_mae,
         'train_compactness': train_compactness,
         'train_separation': train_separation,
         'train_balance': train_balance,
         'valid_total_loss': valid_total_loss,
         'valid_geh': valid_geh,
-        'valid_mae': valid_mae,
         'valid_compactness': valid_compactness,
         'valid_separation': valid_separation,
         'valid_balance': valid_balance

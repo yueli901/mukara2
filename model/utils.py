@@ -71,8 +71,9 @@ def compute_compactness_loss(pixel_embeddings, cluster_embeddings, cluster_assig
     expanded_pixel_embeddings = tf.expand_dims(pixel_embeddings, 1)  # (N, 1, D)
     expanded_cluster_centroids = tf.expand_dims(cluster_embeddings, 0)  # (1, K, D)
     squared_differences = tf.square(expanded_pixel_embeddings - expanded_cluster_centroids)  # (N, K, D)
-    weighted_distances = tf.reduce_sum(tf.expand_dims(cluster_assignments, axis=-1) * squared_differences, axis=(0, 1))  # (D,)
-    return tf.reduce_mean(weighted_distances)  # Scalar loss
+    weighted_distances = tf.reduce_mean(tf.expand_dims(cluster_assignments, axis=-1) * squared_differences)  # (1,) remove scaling effect of N
+
+    return weighted_distances
 
 
 def compute_separation_loss(cluster_embeddings):
@@ -101,6 +102,6 @@ def compute_balance_loss(cluster_assignments):
     Returns:
         tf.Tensor: Scalar balance loss.
     """
-    cluster_usage = tf.reduce_sum(cluster_assignments, axis=0)  # (K,)
+    cluster_usage = tf.reduce_mean(cluster_assignments, axis=0)  # (K,) remove scaling effect of N
     mean_usage = tf.reduce_mean(cluster_usage, keepdims=True)  # (1,)
     return tf.reduce_mean(tf.square(cluster_usage - mean_usage))  # Scalar loss

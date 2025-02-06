@@ -33,7 +33,7 @@ class PixelEmbedding(tf.keras.layers.Layer):
                 tf.Tensor: O pixel embeddings (N, D)
                 tf.Tensor: D pixel embeddings (N, D)
         """
-        sensor_cache_dir = os.path.join(PATH['cache'], sensor_id)
+        sensor_cache_dir = os.path.join(PATH['cache'] + '_' + str(MODEL['embedding_dim']), sensor_id)
         
         if not os.path.exists(sensor_cache_dir):
             os.makedirs(sensor_cache_dir)

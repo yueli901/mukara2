@@ -44,7 +44,7 @@ class Mukara(tf.keras.Model):
             o_cluster_embeddings = cross_layer(o_cluster_embeddings, d_cluster_embeddings)  # Cross-attention
             d_cluster_embeddings = cross_layer(d_cluster_embeddings, o_cluster_embeddings)  # Cross-attention
         
-        o_cluster_embeddings = tf.squeeze(o_cluster_embeddings) # from (1, K D) to (K, D)
+        o_cluster_embeddings = tf.squeeze(o_cluster_embeddings) # from (1, K, D) to (K, D)
         d_cluster_embeddings = tf.squeeze(d_cluster_embeddings)
 
         # Predict traffic volume using pooled O and D cluster embeddings (1,)

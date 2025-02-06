@@ -16,7 +16,7 @@ tf.random.set_seed(TRAINING['seed'])
 random.seed(TRAINING['seed'])
 
 # Disable GPUs if required
-# tf.config.set_visible_devices([], 'GPU')
+tf.config.set_visible_devices([], 'GPU')
 
 # Configure logging
 logging.basicConfig(
@@ -54,12 +54,17 @@ def train_model(mukara, id_to_gt, scaler, train_ids, test_ids):
             print(f"Training complete for epoch {epoch}, sensor {i}/{len(train_ids)}.")
             
             # Evaluate model every 50 sensors
-            if i % 100 == 0:
+            if i % TRAINING['eval_interval'] == 0 or i == len(train_ids):
                 train_loss = evaluate_model(mukara, scaler, train_ids)
                 test_loss = evaluate_model(mukara, scaler, test_ids)
                 
                 logging.info(f"Epoch {epoch}, Sensor {i}: Train Loss: {format_loss(train_loss)}")
                 logging.info(f"Epoch {epoch}, Sensor {i}: Valid Loss: {format_loss(test_loss)}")
+        
+        # Timestamp for model name
+        formatted_time = datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
+        model_filename = os.path.join(PATH["param"], f"{formatted_time}.h5")
+        mukara.save_weights(model_filename)
 
 
 def compute_loss(gt, pred, pixel_embeddings, cluster_embeddings, cluster_assignments, scaler, traffic_loss_function):
@@ -144,12 +149,9 @@ def format_loss(loss_dict):
     """
     Formats the loss dictionary into a readable string with .3f precision.
     """
-    return ", ".join([f"{key}: {value:.3f}" for key, value in loss_dict.items()])
+    return ", ".join([f"{key}: {value:.6f}" for key, value in loss_dict.items()])
 
 if __name__ == '__main__':
-    # Timestamp for model name
-    formatted_time = datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
-    model_filename = os.path.join(PATH["param"], f"{formatted_time}.h5")
     
     # Initialize model
     mukara = Mukara() 
@@ -162,6 +164,8 @@ if __name__ == '__main__':
     train_model(mukara, id_to_gt, scaler, train_ids, test_ids)
     
     # Save model parameters
+    formatted_time = datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
+    model_filename = os.path.join(PATH["param"], f"{formatted_time}.h5")
     mukara.save_weights(model_filename)
     print(mukara.summary())
     print("Model saved successfully.")
