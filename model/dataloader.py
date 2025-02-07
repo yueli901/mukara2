@@ -64,6 +64,18 @@ def load_grid_cells():
     
     return grid_cells
 
+
+def get_pixel_coordinates(grid_cells, indices):
+    """
+    Fetches pixel coordinates given their indices in the grid.
+
+    Returns:
+        tf.Tensor: (N, 2) x, y coordinates of pixels.
+    """
+    pixel_coords = np.array([(grid_cells.iloc[i].centroid.x, grid_cells.iloc[i].centroid.y) for i in indices])
+    return tf.convert_to_tensor(pixel_coords, dtype=tf.float32)  # (N, 2)
+
+
 def load_gt():
     """
     Load the ground truth (traffic volume).
@@ -129,8 +141,8 @@ def get_sensor_coordinates(sensor_id):
     # Define transformation from WGS84 (EPSG:4326) to British National Grid (EPSG:27700)
     transformer = pyproj.Transformer.from_crs("epsg:4326", "epsg:27700", always_xy=True)
     x, y = transformer.transform(lon, lat)
-    
-    return (x, y)
+
+    return tf.convert_to_tensor((x, y), dtype=tf.float32)
 
 
 def get_polygon(sensor_id, region_type):

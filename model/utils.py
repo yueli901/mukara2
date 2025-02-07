@@ -55,53 +55,74 @@ def train_test_sampler(sensor_ids, true_probability):
     test_ids = [sensor_id for sensor_id in sensor_ids if sensor_id not in train_ids]
     return train_ids, test_ids
 
-
-def compute_compactness_loss(pixel_embeddings, cluster_embeddings, cluster_assignments):
+def compute_feature_compact_loss(o_pixel_embeddings, d_pixel_embeddings, 
+                                 o_cluster_embeddings, d_cluster_embeddings, 
+                                 o_cluster_assignments, d_cluster_assignments):
     """
-    Encourages pixel embeddings within the same cluster to be similar.
-    
+    Ensures that pixel feature embeddings within the same cluster are similar.
+
     Args:
-        pixel_embeddings (tf.Tensor): (N, D) pixel embeddings for a single sensor.
-        cluster_embeddings (tf.Tensor): (K, D) cluster embeddings.
-        cluster_assignments (tf.Tensor): (N, K) cluster assignment weights.
-    
+        o_pixel_embeddings (tf.Tensor): (N_o, D) pixel embeddings for origin.
+        d_pixel_embeddings (tf.Tensor): (N_d, D) pixel embeddings for destination.
+        o_cluster_embeddings (tf.Tensor): (K, D) cluster embeddings for origin.
+        d_cluster_embeddings (tf.Tensor): (K, D) cluster embeddings for destination.
+        o_cluster_assignments (tf.Tensor): (N_o, K) cluster assignment probabilities for origin.
+        d_cluster_assignments (tf.Tensor): (N_d, K) cluster assignment probabilities for destination.
+
     Returns:
-        tf.Tensor: Scalar compactness loss.
+        tf.Tensor: Scalar feature compactness loss.
     """
-    expanded_pixel_embeddings = tf.expand_dims(pixel_embeddings, 1)  # (N, 1, D)
-    expanded_cluster_centroids = tf.expand_dims(cluster_embeddings, 0)  # (1, K, D)
-    squared_differences = tf.square(expanded_pixel_embeddings - expanded_cluster_centroids)  # (N, K, D)
-    weighted_distances = tf.reduce_mean(tf.expand_dims(cluster_assignments, axis=-1) * squared_differences)  # (1,) remove scaling effect of N
+    def compactness_loss(pixel_embeddings, cluster_embeddings, cluster_assignments):
+        """
+        Computes the compactness loss for a given set of pixel and cluster embeddings.
+        """
+        expanded_pixel_embeddings = tf.expand_dims(pixel_embeddings, 1)  # (N, 1, D)
+        expanded_cluster_embeddings = tf.expand_dims(cluster_embeddings, 0)  # (1, K, D)
+        squared_differences = tf.square(expanded_pixel_embeddings - expanded_cluster_embeddings)  # (N, K, D)
+        weighted_distances = tf.reduce_mean(tf.expand_dims(cluster_assignments, axis=-1) * squared_differences)  # (1,)
+        return weighted_distances
 
-    return weighted_distances
+    o_loss = compactness_loss(o_pixel_embeddings, o_cluster_embeddings, o_cluster_assignments)
+    d_loss = compactness_loss(d_pixel_embeddings, d_cluster_embeddings, d_cluster_assignments)
+
+    return (o_loss + d_loss) / 2  # Average over origin and destination
 
 
-def compute_separation_loss(cluster_embeddings):
+def compute_spatial_compact_loss(o_pixel_coordinates, d_pixel_coordinates, 
+                                 o_cluster_assignments, d_cluster_assignments):
     """
-    Encourages cluster embeddings to be distinct.
-    
+    Ensures that pixels within the same cluster are spatially compact.
+
     Args:
-        cluster_embeddings (tf.Tensor): (K, D) cluster embeddings for a single sensor.
-    
-    Returns:
-        tf.Tensor: Scalar separation loss.
-    """
-    # cluster_embeddings = tf.nn.l2_normalize(cluster_embeddings, axis=-1)  # (K, D)
-    cluster_similarity = tf.matmul(cluster_embeddings, cluster_embeddings, transpose_b=True)  # (K, K)
-    identity_matrix = tf.eye(tf.shape(cluster_similarity)[0])
-    off_diagonal_similarity = cluster_similarity * (1 - identity_matrix)
-    return tf.reduce_mean(off_diagonal_similarity)  # Scalar loss
+        o_indices (list): List of pixel indices in the origin region.
+        d_indices (list): List of pixel indices in the destination region.
+        o_cluster_embeddings (tf.Tensor): (K, D) cluster embeddings for origin.
+        d_cluster_embeddings (tf.Tensor): (K, D) cluster embeddings for destination.
+        o_cluster_assignments (tf.Tensor): (N_o, K) cluster assignment probabilities for origin.
+        d_cluster_assignments (tf.Tensor): (N_d, K) cluster assignment probabilities for destination.
+        grid_cells (gpd.GeoDataFrame): GeoDataFrame containing the pixel grid.
 
-def compute_balance_loss(cluster_assignments):
-    """
-    Ensures that clusters are used evenly.
-    
-    Args:
-        cluster_assignments (tf.Tensor): (N, K) cluster assignment probabilities for a single sensor.
-    
     Returns:
-        tf.Tensor: Scalar balance loss.
+        tf.Tensor: Scalar spatial compactness loss.
     """
-    cluster_usage = tf.reduce_mean(cluster_assignments, axis=0)  # (K,) remove scaling effect of N
-    mean_usage = tf.reduce_mean(cluster_usage, keepdims=True)  # (1,)
-    return tf.reduce_mean(tf.square(cluster_usage - mean_usage))  # Scalar loss
+    def spatial_loss(cluster_assignments, pixel_coords):
+        """
+        Computes the spatial compactness loss using weighted geographic centroids.
+        """
+        # Compute cluster centroids
+        weighted_sum = tf.matmul(cluster_assignments, pixel_coords, transpose_a=True)  # (K, 2)
+        sum_weights = tf.reduce_sum(cluster_assignments, axis=0, keepdims=True)  # (1, K)
+        cluster_centroids = weighted_sum / (sum_weights + 1e-6)  # (K, 2)
+
+        # Compute squared distances from each pixel to its assigned cluster centroid
+        expanded_pixel_coords = tf.expand_dims(pixel_coords, 1)  # (N, 1, 2)
+        expanded_cluster_centroids = tf.expand_dims(cluster_centroids, 0)  # (1, K, 2)
+        squared_distances = tf.square(expanded_pixel_coords - expanded_cluster_centroids)  # (N, K, 2)
+        weighted_distances = tf.reduce_mean(tf.expand_dims(cluster_assignments, axis=-1) * squared_distances)  # (1,)
+
+        return weighted_distances
+
+    o_loss = spatial_loss(o_cluster_assignments, o_pixel_coordinates)
+    d_loss = spatial_loss(d_cluster_assignments, d_pixel_coordinates)
+
+    return (o_loss + d_loss) / 2  # Average over origin and destination

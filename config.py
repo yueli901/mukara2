@@ -21,9 +21,9 @@ DATA = {
 
 MODEL = {
     'embedding_dim': 128,
-    'num_clusters': 10,
+    'num_clusters': 30,
     'num_attention_layers': 2,
-    'num_attention_heads': 3,
+    # 'num_attention_heads': 3,
     'pooling_method': 'attention',
     }
 

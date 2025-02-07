@@ -3,7 +3,7 @@ import json
 import os
 import numpy as np
 from config import MODEL, PATH, DATA  # Import hyperparameter settings and cache path
-from model.dataloader import load_grid_features, load_grid_cells, get_sensor_coordinates, get_polygon
+from model.dataloader import load_grid_features, load_grid_cells, get_polygon
 from shapely.geometry import shape
 
 class PixelEmbedding(tf.keras.layers.Layer):
@@ -17,13 +17,11 @@ class PixelEmbedding(tf.keras.layers.Layer):
         # MLP for feature embedding
         self.feature_mlp = tf.keras.layers.Dense(MODEL['embedding_dim'], activation='relu')
         
-        # MLP for absolute 2D positional encoding
-        self.position_mlp = tf.keras.layers.Dense(MODEL['embedding_dim'], activation='relu')
-
     def call(self, sensor_id):
         """
-        Compute final pixel embeddings for one sensor by combining feature, isochrone, and positional encodings.
-        Load cache if already computed.
+        Compute pixel embeddings for one sensor from pixel features.
+        Compute pixel isochrone classes.
+        Load cache for O/D pixel indices and pixel isochrone classes if already computed.
         
         Args:
             sensor_id (str): Sensor identifier.
@@ -38,67 +36,47 @@ class PixelEmbedding(tf.keras.layers.Layer):
         if not os.path.exists(sensor_cache_dir):
             os.makedirs(sensor_cache_dir)
         
-        index_path = os.path.join(sensor_cache_dir, "index.json")
-        feature_cache = os.path.join(sensor_cache_dir, "features.npy")
-        position_cache = os.path.join(sensor_cache_dir, "position.npy")
+        indices_path = os.path.join(sensor_cache_dir, "indices.json")
         o_isochrone_cache = os.path.join(sensor_cache_dir, "isochrone_o.npy")
         d_isochrone_cache = os.path.join(sensor_cache_dir, "isochrone_d.npy")
         
-        if os.path.exists(index_path):
-            with open(index_path, 'r') as f:
+        if os.path.exists(indices_path) and os.path.exists(o_isochrone_cache) and os.path.exists(d_isochrone_cache):
+            with open(indices_path, 'r') as f:
                 cache_data = json.load(f)
             o_indices = cache_data['o_indices']
             d_indices = cache_data['d_indices']
             union_indices = list(set(o_indices) | set(d_indices))
             
-            raw_features = np.load(feature_cache)
-            raw_absolute_position_encoding = np.load(position_cache)
-            raw_isochrone_encoding_o = np.load(o_isochrone_cache)
-            raw_isochrone_encoding_d = np.load(d_isochrone_cache)
+            raw_features = tf.gather(tf.reshape(self.grid_features, [-1, self.C]), union_indices).numpy()  # (N', C)
+            o_isochrone_classes = np.load(o_isochrone_cache)
+            d_isochrone_classes = np.load(d_isochrone_cache)
         else:
             print(f"Computing cache for sensor {sensor_id}.")
             o_polygon = get_polygon(sensor_id, 'o')
             d_polygon = get_polygon(sensor_id, 'd')
             
             o_indices, d_indices, union_indices = self.compute_pixel_indices(o_polygon, d_polygon)
-            raw_features = tf.gather(tf.reshape(self.grid_features, [-1, self.C]), union_indices).numpy()  # (N, C)
+            raw_features = tf.gather(tf.reshape(self.grid_features, [-1, self.C]), union_indices).numpy()  # (N', C)
             
-            sensor_coords = get_sensor_coordinates(sensor_id)
-            raw_absolute_position_encoding = self.compute_raw_absolute_position_encoding(sensor_coords, union_indices)
-            
-            raw_isochrone_encoding_o = self.compute_raw_isochrone_encoding(sensor_id, o_indices, 'o')
-            raw_isochrone_encoding_d = self.compute_raw_isochrone_encoding(sensor_id, d_indices, 'd')
-            
-            np.save(feature_cache, raw_features)
-            np.save(position_cache, raw_absolute_position_encoding)
-            np.save(o_isochrone_cache, raw_isochrone_encoding_o)
-            np.save(d_isochrone_cache, raw_isochrone_encoding_d)
+            o_isochrone_classes = self.compute_pixel_isochrone_classes(sensor_id, o_indices, 'o') # (N, )
+            d_isochrone_classes = self.compute_pixel_isochrone_classes(sensor_id, d_indices, 'd') # (N, )
+
+            np.save(o_isochrone_cache, o_isochrone_classes)
+            np.save(d_isochrone_cache, d_isochrone_classes)
             
             cache_data = {'o_indices': o_indices, 'd_indices': d_indices}
-            with open(index_path, 'w') as f:
+            with open(indices_path, 'w') as f:
                 json.dump(cache_data, f)
         
-        feature_embedding = self.feature_mlp(tf.convert_to_tensor(raw_features, dtype=tf.float32))
-        absolute_position_embedding = self.position_mlp(tf.convert_to_tensor(raw_absolute_position_encoding, dtype=tf.float32))
+        pixel_embeddings = self.feature_mlp(tf.convert_to_tensor(raw_features, dtype=tf.float32))
         
         o_positions = [union_indices.index(i) for i in o_indices]
         d_positions = [union_indices.index(i) for i in d_indices]
         
-        o_feature_embedding = tf.gather(feature_embedding, o_positions)
-        d_feature_embedding = tf.gather(feature_embedding, d_positions)
-        
-        o_absolute_position_embedding = tf.gather(absolute_position_embedding, o_positions)
-        d_absolute_position_embedding = tf.gather(absolute_position_embedding, d_positions)
-        
-        o_isochrone_embedding = tf.convert_to_tensor(raw_isochrone_encoding_o, dtype=tf.float32)
-        d_isochrone_embedding = tf.convert_to_tensor(raw_isochrone_encoding_d, dtype=tf.float32)
-        
-        o_pixel_embeddings = o_feature_embedding + o_isochrone_embedding + o_absolute_position_embedding
-        d_pixel_embeddings = d_feature_embedding + d_isochrone_embedding + d_absolute_position_embedding
-        
-        assert o_pixel_embeddings.shape == (len(o_indices), MODEL['embedding_dim']), "Shape mismatch!"
+        o_pixel_embeddings = tf.gather(pixel_embeddings, o_positions)
+        d_pixel_embeddings = tf.gather(pixel_embeddings, d_positions)
 
-        return o_pixel_embeddings, d_pixel_embeddings
+        return o_pixel_embeddings, d_pixel_embeddings, o_indices, d_indices, o_isochrone_classes, d_isochrone_classes
 
     def compute_pixel_indices(self, O_polygon, D_polygon):
         """
@@ -125,9 +103,9 @@ class PixelEmbedding(tf.keras.layers.Layer):
         
         return o_indices, d_indices, union_indices
         
-    def compute_raw_isochrone_encoding(self, sensor_id, indices, region_type):
+    def compute_pixel_isochrone_classes(self, sensor_id, indices, region_type):
         """
-        Compute raw isochrone encoding for each pixel index based on the shortest travel time isochrone.
+        Returns the isochrone class for each pixel indices based on the shortest travel time isochrone.
         
         Args:
             sensor_id (str): Unique identifier of the sensor.
@@ -135,7 +113,7 @@ class PixelEmbedding(tf.keras.layers.Layer):
             region_type (str): 'o' for origin, 'd' for destination.
         
         Returns:
-            np.ndarray: Isochrone positional encoding (N, D).
+            np.ndarray: Isochrone class (N, ), with values 1, 2, ..., 12 indicating isochrone classes.
         """
         # Define mapping for isochrone intervals (300s = 1, 600s = 2, ..., 3600s = 12)
         isochrone_levels_map = {t: i + 1 for i, t in enumerate(DATA['isochrone_intervals'])}
@@ -169,47 +147,4 @@ class PixelEmbedding(tf.keras.layers.Layer):
             # Update remaining mask to exclude already assigned indices
             remaining_mask[full_mask] = False
         
-        # Convert isochrone labels to final encoding (Transformer-style)
-        div_term = np.exp(np.arange(0, MODEL['embedding_dim'], 2, dtype=np.float32) * -np.log(10000.0) / MODEL['embedding_dim'])
-        sin_encoding = np.sin(isochrone_labels[:, None] * div_term)
-        cos_encoding = np.cos(isochrone_labels[:, None] * div_term)
-
-        encoding = np.empty((isochrone_labels.shape[0], MODEL['embedding_dim']), dtype=np.float32)
-        encoding[:, 0::2] = sin_encoding  # Even indices: sin
-        encoding[:, 1::2] = cos_encoding  # Odd indices: cos
-        
-        return encoding
-
-    def compute_raw_absolute_position_encoding(self, sensor_coords, union_indices):
-        """
-        Compute absolute 2D positional encoding based on sensor coordinates in EPSG:27700.
-        
-        Args:
-            sensor_coords (tuple): (x, y) coordinates of the sensor in EPSG:27700.
-            union_indices (list): List of grid indices representing selected pixels.
-
-        Returns:
-            np.ndarray: Absolute positional encoding before MLP transformation (N, 3).
-        """
-        # Load grid cells to get pixel coordinates
-        grid_cells = load_grid_cells()
-        selected_grid_cells = grid_cells.iloc[union_indices]
-        pixel_coords = np.array([(cell.centroid.x, cell.centroid.y) for cell in selected_grid_cells.geometry])
-        
-        sensor_x, sensor_y = sensor_coords
-
-        # Compute polar coordinates relative to the sensor
-        rho = np.sqrt((pixel_coords[:, 0] - sensor_x) ** 2 + (pixel_coords[:, 1] - sensor_y) ** 2)
-        theta = np.arctan2(pixel_coords[:, 1] - sensor_y, pixel_coords[:, 0] - sensor_x)
-
-        # Normalize distance with a scale factor
-        scale_factor = np.max(rho) # relative to the sensor's case, not global scale_factor
-        normalized_rho = rho / scale_factor
-
-        encoding = np.stack([
-            normalized_rho,   # Direct normalized distance
-            np.sin(theta),    # Angular sin encoding
-            np.cos(theta)     # Angular cos encoding
-        ], axis=-1)
-
-        return encoding
+        return isochrone_labels
