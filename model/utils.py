@@ -26,7 +26,7 @@ class Scaler:
         return tf.where(tf.math.is_nan(data), data, data * self.std + self.mean)
 
 
-def MSE_z(label_z, pred_z, scaler):
+def MSE_Z(label_z, pred_z, scaler):
     return tf.reduce_mean(tf.square(label_z - pred_z))
 
 def MAE(label_z, pred_z, scaler):
@@ -43,6 +43,7 @@ def MGEH(label_z, pred_z, scaler):
     pred = scaler.inverse_transform(pred_z)
     label = scaler.inverse_transform(label_z)
     gehs = tf.sqrt(2 * tf.square(pred - label) / (tf.abs(pred) + label + 1e-8))
+    print(f"GT: {label}, Pred: {pred}, GEH: {gehs}")
     return tf.reduce_mean(gehs)
 
 
@@ -111,7 +112,8 @@ def compute_spatial_compact_loss(o_pixel_coordinates, d_pixel_coordinates,
         """
         # Compute cluster centroids
         weighted_sum = tf.matmul(cluster_assignments, pixel_coords, transpose_a=True)  # (K, 2)
-        sum_weights = tf.reduce_sum(cluster_assignments, axis=0, keepdims=True)  # (1, K)
+        sum_weights = tf.reduce_sum(cluster_assignments, axis=0)  # (K,)
+        sum_weights = tf.expand_dims(sum_weights, axis=-1)  # (K, 1)
         cluster_centroids = weighted_sum / (sum_weights + 1e-6)  # (K, 2)
 
         # Compute squared distances from each pixel to its assigned cluster centroid

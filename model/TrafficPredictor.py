@@ -2,17 +2,22 @@ import tensorflow as tf
 from config import MODEL
 
 class TrafficPredictor(tf.keras.layers.Layer):
-    def __init__(self):
-        super(TrafficPredictor, self).__init__()
+    def __init__(self, name):
+        super(TrafficPredictor, self).__init__(name=name)
         
         self.pooling_method = MODEL['pooling_method']  # Options: 'mean', 'sum', 'attention'
         
         # Attention pooling (if selected)
         if self.pooling_method == 'attention':
-            self.attention_weights = tf.keras.layers.Dense(1, activation='softmax')
+            self.attention_weights = tf.keras.layers.Dense(1, activation='softmax', name=name+'_pooling_mlp')
         
         # Final prediction layer
-        self.output_layer = tf.keras.layers.Dense(1, activation=None)  # Traffic volume output
+        self.output_layer = tf.keras.Sequential([
+            tf.keras.layers.Dense(128, activation='relu', name=name+'_mlp_1'),
+            tf.keras.layers.Dense(64, activation='relu', name=name+'_mlp_2'),
+            tf.keras.layers.Dense(32, activation='relu', name=name+'_mlp_3'),
+            tf.keras.layers.Dense(1, name=name+'_output')
+        ], name=name+'_output_mlp')
         
     def pooling(self, cluster_embeddings):
         """
@@ -45,8 +50,6 @@ class TrafficPredictor(tf.keras.layers.Layer):
         Returns:
             tf.Tensor: Scalar predicted traffic volume.
         """
-        assert o_cluster_embeddings.shape == (MODEL['num_clusters'], MODEL['embedding_dim']), "Shape mismatch!"
-
         # Apply pooling separately to O and D cluster embeddings
         o_pooled = self.pooling(o_cluster_embeddings)  # (D,)
         d_pooled = self.pooling(d_cluster_embeddings)  # (D,)

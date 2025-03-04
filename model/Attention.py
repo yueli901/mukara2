@@ -1,78 +1,69 @@
 import tensorflow as tf
-import numpy as np
 from config import MODEL
-from model.dataloader import load_grid_cells, get_pixel_coordinates
 
 class CustomAttentionLayer(tf.keras.layers.Layer):
-    def __init__(self):
-        super(CustomAttentionLayer, self).__init__()
+    def __init__(self, name, grid_cells):
+        super(CustomAttentionLayer, self).__init__(name=name)
         
-        self.grid_cells = load_grid_cells()
+        self.grid_cells = grid_cells  # Store grid cells for spatial reference
 
-        # Custom Multi-Head Attention ?
-
-        # Layer normalization
-        self.norm1 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
-        self.norm2 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
+        # Layer Normalization
+        self.norm1 = tf.keras.layers.LayerNormalization(epsilon=1e-6, name=name+'_norm1')
+        self.norm2 = tf.keras.layers.LayerNormalization(epsilon=1e-6, name=name+'_norm2')
 
         # Feed Forward Network (FFN)
         self.ffn = tf.keras.Sequential([
-            tf.keras.layers.Dense(MODEL['embedding_dim'] * 4, activation='relu'),
-            tf.keras.layers.Dense(MODEL['embedding_dim'])
-        ])
+            tf.keras.layers.Dense(MODEL['embedding_dim'] * 4, activation='relu', name=name+'_ffn_1'),
+            tf.keras.layers.Dense(MODEL['embedding_dim'], name=name+'_ffn_2')
+        ], name=name+'_ffn')
 
         # MLPs for learnable G and H
         self.G_MLP = tf.keras.Sequential([
-            tf.keras.layers.Dense(32, activation='relu'),
-            tf.keras.layers.Dense(1, activation='relu')
-        ])
+            tf.keras.layers.Dense(32, activation='relu', name=name+'_g_mlp_1'),
+            tf.keras.layers.Dense(1, activation='relu', name=name+'_g_mlp_2')
+        ], name=name+'_g_mlp')
 
         self.H_MLP = tf.keras.Sequential([
-            tf.keras.layers.Dense(32, activation='relu'),
-            tf.keras.layers.Dense(1, activation='relu')
-        ])
-        
-    def call(self, sensor_coords, query, key, q_assignments, k_assignments, q_indices, k_indices, q_isochrone_classes, k_isochrone_classes):
+            tf.keras.layers.Dense(32, activation='relu', name=name+'_h_mlp_1'),
+            tf.keras.layers.Dense(1, name=name+'_h_mlp_2')
+        ], name=name+'_h_mlp')
+
+    def call(self, sensor_coords, query, key, q_cluster_centroids, k_cluster_centroids, q_cluster_isochrone_encodings, k_cluster_isochrone_encodings):
         """
         Custom Self-Attention and Cross-Attention Mechanism with Geometric Encoding.
 
         Args:
             sensor_coords (tf.Tensor): (2,) sensor x, y coordinates.
-            query, key (tf.Tensor): (K, D) cluster embeddings.
-            q_assignments, k_assignments (tf.Tensor): (N, K) cluster assignment probabilities.
-            q_indices, k_indices (list): Indices of pixels in the grid.
-            q_isochrone_classes, k_isochrone_classes (tf.Tensor): (N,) pixel isochrone class values (1-12).
+            query, key (tf.Tensor): (K, D) and (K', D) cluster embeddings.
+            q_cluster_centroids, k_cluster_centroids (tf.Tensor): (K, 2) and (K', 2) cluster centroids.
+            q_cluster_isochrone_encodings, k_cluster_isochrone_encodings (tf.Tensor): (K, 12) and (K', 12) isochrone encodings.
 
         Returns:
-            tf.Tensor: (K, D) updated cluster embeddings after attention.
+            tf.Tensor: (K, D) Updated cluster embeddings after attention.
         """
 
-        # Compute soft-weighted centroid for clusters
-        q_cluster_centroids = self.compute_cluster_centroids(q_assignments, q_indices)  # (K, 2)
-        k_cluster_centroids = self.compute_cluster_centroids(k_assignments, k_indices)  # (K, 2)
+        # Get the number of clusters in q (K) and k (K')
+        K = tf.shape(q_cluster_centroids)[0]  # Number of clusters in q
+        K_prime = tf.shape(k_cluster_centroids)[0]  # Number of clusters in k
 
         # Compute pairwise distance vectors and their norms
-        r_kk_prime = q_cluster_centroids[:, None, :] - k_cluster_centroids[None, :, :]  # (K, K, 2)
+        r_kk_prime = q_cluster_centroids[:, None, :] - k_cluster_centroids[None, :, :]  # (K, K', 2)
         r_ks = q_cluster_centroids - sensor_coords  # (K, 2)
-        r_k_prime_s = k_cluster_centroids - sensor_coords  # (K, 2)
-        ### potential normalizing issue
-        norm_r_kk_prime = tf.norm(r_kk_prime, axis=-1)  # (K, K)
+        r_k_prime_s = k_cluster_centroids - sensor_coords  # (K', 2)
+
+        norm_r_kk_prime = tf.norm(r_kk_prime, axis=-1)  # (K, K')
         norm_r_ks = tf.norm(r_ks, axis=-1)  # (K,)
-        norm_r_k_prime_s = tf.norm(r_k_prime_s, axis=-1)  # (K,)
+        norm_r_k_prime_s = tf.norm(r_k_prime_s, axis=-1)  # (K',)
 
-        # Compute cluster-level isochrone embeddings
-        d_k = self.compute_cluster_isochrone_encoding(q_assignments, q_isochrone_classes)  # (K, 12)
-        d_k_prime = self.compute_cluster_isochrone_encoding(k_assignments, k_isochrone_classes)  # (K, 12)
+        # Compute attention bias
+        R_kk_prime = self.attention_bias(q_cluster_isochrone_encodings, k_cluster_isochrone_encodings, norm_r_kk_prime, norm_r_ks, norm_r_k_prime_s, K, K_prime)
 
-        # Compute learnable geometric attention scaling factor
-        R_kk_prime = self.geometric_attention_factor(d_k, d_k_prime, norm_r_kk_prime, norm_r_ks, norm_r_k_prime_s)
-
-        # Compute Multi-Head Attention (scaled before softmax)
-        attention_logits = self.compute_scaled_attention(query, key)  # (K, K)
-        attention_logits = attention_logits * R_kk_prime  # Apply geometric scaling before softmax
+        # Compute scaled dot-product attention
+        attention_logits = self.compute_scaled_attention(query, key)  # (K, K')
+        attention_logits = attention_logits + R_kk_prime
 
         # Apply softmax to get attention weights
-        attention_weights = tf.nn.softmax(attention_logits, axis=-1)  # (K, K)
+        attention_weights = tf.nn.softmax(attention_logits, axis=-1)  # (K, K')
 
         # Compute new attention output
         attention_output = tf.matmul(attention_weights, key)  # (K, D)
@@ -93,56 +84,47 @@ class CustomAttentionLayer(tf.keras.layers.Layer):
         Compute scaled dot-product attention logits.
 
         Args:
-            query, key (tf.Tensor): (K, D) cluster embeddings.
+            query (tf.Tensor): (K, D) Cluster embeddings.
+            key (tf.Tensor): (K', D) Cluster embeddings.
 
         Returns:
-            tf.Tensor: (K, K) attention logits.
+            tf.Tensor: (K, K') Attention logits.
         """
         d_k = tf.cast(tf.shape(query)[-1], tf.float32)  # Scaling factor
-        return tf.matmul(query, key, transpose_b=True) / tf.sqrt(d_k)  # (K, K)
+        return tf.matmul(query, key, transpose_b=True) / tf.sqrt(d_k)  # (K, K')
 
-    def compute_cluster_centroids(self, cluster_assignments, indices):
-        """
-        Compute soft-weighted cluster centroids in 2D space.
-
-        Args:
-            cluster_assignments (tf.Tensor): (N, K) cluster assignment probabilities.
-            indices (list): Pixel grid indices.
-
-        Returns:
-            tf.Tensor: (K, 2) cluster centroids in x, y coordinates.
-        """
-        grid_coords = get_pixel_coordinates(self.grid_cells, indices)  # (N, 2)
-        weighted_sum = tf.matmul(cluster_assignments, grid_coords, transpose_a=True)  # (K, 2)
-        sum_weights = tf.reduce_sum(cluster_assignments, axis=0, keepdims=True)  # (1, K)
-        return weighted_sum / (sum_weights + 1e-6)  # (K, 2)
-
-    def compute_cluster_isochrone_encoding(self, cluster_assignments, pixel_isochrone_classes):
-        """
-        Compute soft-weighted cluster-level isochrone encoding.
-
-        Args:
-            cluster_assignments (tf.Tensor): (N, K) cluster assignment probabilities.
-            pixel_isochrone_classes (tf.Tensor): (N,) pixel isochrone classes (1-12).
-
-        Returns:
-            tf.Tensor: (K, 12) normalized isochrone class distribution.
-        """
-        pixel_isochrone_classes = tf.one_hot(pixel_isochrone_classes - 1, depth=12)  # (N, 12)
-        weighted_isochrone = tf.matmul(cluster_assignments, pixel_isochrone_classes, transpose_a=True)  # (K, 12)
-        return weighted_isochrone / tf.reduce_sum(weighted_isochrone, axis=-1, keepdims=True)  # Normalize across isochrone classes
-
-    def geometric_attention_factor(self, d_k, d_k_prime, norm_r_kk_prime, norm_r_ks, norm_r_k_prime_s):
+    def attention_bias(self, d_k, d_k_prime, norm_r_kk_prime, norm_r_ks, norm_r_k_prime_s, K, K_prime):
         """
         Compute the geometric-aware scaling factor for attention using MLP.
 
         Args:
-            d_k, d_k_prime (tf.Tensor): (K, 12) soft-clustered isochrone class encodings.
-            norm_r_kk_prime, norm_r_ks, norm_r_k_prime_s (tf.Tensor): Norms of spatial distances.
+            d_k, d_k_prime (tf.Tensor): (K, 12) and (K', 12) Soft-clustered isochrone class encodings.
+            norm_r_kk_prime, norm_r_ks, norm_r_k_prime_s (tf.Tensor): (K, K'), (K,), and (K',) norms of spatial distances.
+            K (int): Number of clusters in q.
+            K_prime (int): Number of clusters in k.
 
         Returns:
-            tf.Tensor: (K, K) geometric attention scaling factor.
+            tf.Tensor: (K, K') Geometric attention scaling factor.
         """
-        G = self.G_MLP(tf.stack([d_k[:, None, :], d_k_prime[None, :, :]], axis=-1))  # (K, K, 1)
-        H = self.H_MLP(tf.stack([norm_r_kk_prime, norm_r_ks[:, None], norm_r_k_prime_s[None, :]], axis=-1))  # (K, K, 1)
-        return tf.squeeze(G * H, axis=-1)  # (K, K)
+        # Explicitly broadcast d_k and d_k_prime to match (K, K', 12)
+        d_k_broadcast = tf.broadcast_to(d_k[:, None, :], [K, K_prime, 12])  # (K, K', 12)
+        d_k_prime_broadcast = tf.broadcast_to(d_k_prime[None, :, :], [K, K_prime, 12])  # (K, K', 12)
+
+        # Compute G using learnable MLP
+        G_input = tf.concat([d_k_broadcast, d_k_prime_broadcast], axis=-1)  # (K, K', 24)
+        G = self.G_MLP(G_input)  # (K, K', 1)
+
+        # Expand and broadcast norm_r_ks
+        norm_r_ks_broadcast = tf.broadcast_to(norm_r_ks[:, None], [K, K_prime])  # (K, K')
+        norm_r_ks_broadcast = tf.expand_dims(norm_r_ks_broadcast, axis=-1)  # (K, K', 1)
+
+        # Expand and broadcast norm_r_k_prime_s
+        norm_r_k_prime_s_broadcast = tf.broadcast_to(norm_r_k_prime_s[None, :], [K, K_prime])  # (K, K')
+        norm_r_k_prime_s_broadcast = tf.expand_dims(norm_r_k_prime_s_broadcast, axis=-1)  # (K, K', 1)
+
+        # Now they both have shape (K, K', 1) and can be concatenated
+        H_input = tf.concat([norm_r_kk_prime[..., None], norm_r_ks_broadcast, norm_r_k_prime_s_broadcast], axis=-1)  # (K, K', 3)
+        H = self.H_MLP(H_input)  # (K, K', 1)
+
+        # Compute final geometric attention scaling factor
+        return tf.squeeze(G * H, axis=-1)  # (K, K')

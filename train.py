@@ -7,7 +7,7 @@ import random
 
 from config import PATH, DATA, TRAINING
 from model.Mukara import Mukara
-from model.dataloader import load_grid_cells, load_gt, get_pixel_coordinates
+from model.dataloader import load_grid_cells, load_gt
 import model.utils as utils
 
 
@@ -22,7 +22,8 @@ class MukaraTrainer:
         random.seed(TRAINING['seed'])
 
         # Disable GPUs if required
-        tf.config.set_visible_devices([], 'GPU')
+        if TRAINING['use_gpu'] == False:
+            tf.config.set_visible_devices([], 'GPU')
 
         # Configure logging
         logging.basicConfig(
@@ -36,41 +37,18 @@ class MukaraTrainer:
         self.model = Mukara()
         self.optimizer = tf.keras.optimizers.Adam(learning_rate=TRAINING['lr'])
 
-        # Load dataset and prepare training/testing IDs
-        self.grid_cells = load_grid_cells()
-
         self.id_to_gt, self.scaler = load_gt()
         self.train_ids, self.test_ids = utils.train_test_sampler(
             list(self.id_to_gt.keys()), TRAINING['train_prop']
         )
 
-    def compute_loss(self, gt, pred, appendix, traffic_loss_function):
+    def compute_loss(self, gt, pred, traffic_loss_function):
         """
         Computes the total loss with multiple components.
         """
         traffic_loss = getattr(utils, traffic_loss_function)(gt, pred, self.scaler)
-
-        o_indices, d_indices, o_pixel_embeddings, d_pixel_embeddings, o_cluster_embeddings, d_cluster_embeddings, o_cluster_assignments, d_cluster_assignments = appendix
-
-        o_pixel_coordinates = get_pixel_coordinates(self.grid_cells, o_indices)
-        d_pixel_coordinates = get_pixel_coordinates(self.grid_cells, d_indices)
-
-        feature_compact_loss = utils.compute_feature_compact_loss(
-            o_pixel_embeddings, d_pixel_embeddings, o_cluster_embeddings, d_cluster_embeddings,
-            o_cluster_assignments, d_cluster_assignments
-        )
-
-        spatial_compact_loss = utils.compute_spatial_compact_loss(
-            o_pixel_coordinates, d_pixel_coordinates, o_cluster_assignments, d_cluster_assignments
-        )
-
-        total_loss = (
-            TRAINING['lambda_traffic'] * traffic_loss +
-            TRAINING['lambda_feature_compact'] * feature_compact_loss +
-            TRAINING['lambda_spatial_compact'] * spatial_compact_loss
-        )
-
-        return total_loss, (traffic_loss, feature_compact_loss, spatial_compact_loss)
+        
+        return traffic_loss
 
     def train_model(self):
         """
@@ -82,11 +60,11 @@ class MukaraTrainer:
 
             for i, sensor_id in enumerate(self.train_ids, start=1):
                 with tf.GradientTape() as tape:
-                    pred, appendix = self.model(sensor_id)
+                    pred = self.model(sensor_id)
                     gt = tf.convert_to_tensor(self.id_to_gt[sensor_id], dtype=tf.float32)
 
                     # Compute total loss
-                    loss, _ = self.compute_loss(gt, pred, appendix, TRAINING['loss_function'])
+                    loss = self.compute_loss(gt, pred, TRAINING['loss_function'])
 
                 # Compute and apply gradients
                 grads = tape.gradient(loss, self.model.trainable_variables)
@@ -111,30 +89,19 @@ class MukaraTrainer:
         Evaluates the model on a subset of sensor IDs and logs all loss components.
         """
         sampled_ids = random.sample(ids, TRAINING['eval_samples'])
-        loss = { "Total Loss": 0.0 }
+        loss = {}
 
         for metric in TRAINING['eval_metrics']:
-            loss[f"Traffic ({metric})"] = 0.0
-
-        loss['feature_compact_loss'] = 0.0
-        loss['spatial_compact_loss'] = 0.0
+            loss[metric] = 0.0
 
         for sensor_id in sampled_ids:
-            pred, appendix = self.model(sensor_id)
+            pred = self.model(sensor_id)
             gt = tf.convert_to_tensor(self.id_to_gt[sensor_id], dtype=tf.float32)
-
-            total_loss, (traffic_loss, feature_compact_loss, spatial_compact_loss) = self.compute_loss(
-                gt, pred, appendix, TRAINING['loss_function']
-            )
-
-            loss["Total Loss"] += total_loss.numpy()
-            loss['feature_compact_loss'] += feature_compact_loss.numpy()
-            loss['spatial_compact_loss'] += spatial_compact_loss.numpy()
 
             # Compute traffic loss using different evaluation metrics
             for metric in TRAINING['eval_metrics']:
-                _, (traffic_loss, _, _) = self.compute_loss(gt, pred, appendix, metric)
-                loss[f"Traffic ({metric})"] += traffic_loss.numpy()
+                traffic_loss = self.compute_loss(gt, pred, metric)
+                loss[metric] += traffic_loss.numpy()
 
         # Normalize by the number of evaluated samples
         num_samples = len(sampled_ids)

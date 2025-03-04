@@ -2,20 +2,16 @@ import tensorflow as tf
 import json
 import os
 import numpy as np
-from config import MODEL, PATH, DATA  # Import hyperparameter settings and cache path
-from model.dataloader import load_grid_features, load_grid_cells, get_polygon
+from config import MODEL, PATH, DATA
+from model.dataloader import load_grid_features, get_polygon
 from shapely.geometry import shape
 
 class PixelEmbedding(tf.keras.layers.Layer):
-    def __init__(self):
-        super(PixelEmbedding, self).__init__()
-        
-        self.grid_cells = load_grid_cells()
+    def __init__(self, name, grid_cells):
+        super(PixelEmbedding, self).__init__(name=name)
+        self.grid_cells = grid_cells
         self.grid_features = load_grid_features()
         self.H, self.W, self.C = self.grid_features.shape  # Grid dimensions
-        
-        # MLP for feature embedding
-        self.feature_mlp = tf.keras.layers.Dense(MODEL['embedding_dim'], activation='relu')
         
     def call(self, sensor_id):
         """
@@ -31,7 +27,7 @@ class PixelEmbedding(tf.keras.layers.Layer):
                 tf.Tensor: O pixel embeddings (N, D)
                 tf.Tensor: D pixel embeddings (N, D)
         """
-        sensor_cache_dir = os.path.join(PATH['cache'] + '_' + str(MODEL['embedding_dim']), sensor_id)
+        sensor_cache_dir = os.path.join(PATH['cache'], sensor_id)
         
         if not os.path.exists(sensor_cache_dir):
             os.makedirs(sensor_cache_dir)
@@ -67,16 +63,14 @@ class PixelEmbedding(tf.keras.layers.Layer):
             cache_data = {'o_indices': o_indices, 'd_indices': d_indices}
             with open(indices_path, 'w') as f:
                 json.dump(cache_data, f)
-        
-        pixel_embeddings = self.feature_mlp(tf.convert_to_tensor(raw_features, dtype=tf.float32))
-        
+                
         o_positions = [union_indices.index(i) for i in o_indices]
         d_positions = [union_indices.index(i) for i in d_indices]
         
-        o_pixel_embeddings = tf.gather(pixel_embeddings, o_positions)
-        d_pixel_embeddings = tf.gather(pixel_embeddings, d_positions)
+        o_pixel_features = tf.gather(raw_features, o_positions)
+        d_pixel_features = tf.gather(raw_features, d_positions)
 
-        return o_pixel_embeddings, d_pixel_embeddings, o_indices, d_indices, o_isochrone_classes, d_isochrone_classes
+        return o_pixel_features, d_pixel_features, o_indices, d_indices, o_isochrone_classes, d_isochrone_classes
 
     def compute_pixel_indices(self, O_polygon, D_polygon):
         """

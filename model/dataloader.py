@@ -11,6 +11,8 @@ import pyproj
 from functools import partial
 from shapely.geometry import shape
 from shapely.ops import transform
+from shapely.affinity import translate, scale
+
 
 from model.utils import Scaler
 from config import PATH, DATA, TRAINING
@@ -47,21 +49,43 @@ def load_grid_features():
 
     return grid_features
 
+
 def load_grid_cells():
     """
-    Load the spatial grid cells and ensure they are in EPSG:27700.
+    Load the spatial grid cells, ensure they are in EPSG:27700, 
+    and normalize their geometries.
 
     Returns:
-        geopandas.GeoDataFrame: Grid cells in EPSG:27700.
+        geopandas.GeoDataFrame: Grid cells with fully normalized geometries.
     """
     grid_cells = gpd.read_file(os.path.join(PATH['grid']))
 
+    # Ensure CRS is correct
     if grid_cells.crs is None:
         raise ValueError("Grid cells shapefile does not have a CRS defined.")
     
     if grid_cells.crs.to_epsg() != 27700:
         raise ValueError("The CRS of the shapefile is not EPSG:27700.")
     
+    # Extract all bounding box coordinates
+    # x_min_global = grid_cells.geometry.bounds["minx"].min()
+    # y_min_global = grid_cells.geometry.bounds["miny"].min()
+    # x_max_global = grid_cells.geometry.bounds["maxx"].max()
+    # y_max_global = grid_cells.geometry.bounds["maxy"].max()
+
+    # # Compute a uniform scaling factor (keep aspect ratio)
+    # scale_factor = max(x_max_global - x_min_global, y_max_global - y_min_global)
+
+    # # Apply translation and scaling to the full geometry
+    # def normalize_geometry(geom):
+    #     # Translate to (0,0)
+    #     translated_geom = translate(geom, xoff=-x_min_global, yoff=-y_min_global)
+    #     # Scale to [0,1]
+    #     scaled_geom = scale(translated_geom, xfact=10/scale_factor, yfact=10/scale_factor, origin=(0, 0))
+    #     return scaled_geom
+
+    # grid_cells["geometry"] = grid_cells.geometry.apply(normalize_geometry)
+
     return grid_cells
 
 
@@ -72,7 +96,7 @@ def get_pixel_coordinates(grid_cells, indices):
     Returns:
         tf.Tensor: (N, 2) x, y coordinates of pixels.
     """
-    pixel_coords = np.array([(grid_cells.iloc[i].centroid.x, grid_cells.iloc[i].centroid.y) for i in indices])
+    pixel_coords = np.array([(grid_cells.geometry.iloc[i].centroid.x, grid_cells.geometry.iloc[i].centroid.y) for i in indices])
     return tf.convert_to_tensor(pixel_coords, dtype=tf.float32)  # (N, 2)
 
 
