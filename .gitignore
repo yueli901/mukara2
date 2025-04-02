@@ -1,0 +1,43 @@
+# Ignore macOS system files
+.DS_Store
+
+# Ignore node_modules for Node.js projects
+node_modules/
+
+# Ignore Python compiled files
+*.pyc
+__pycache__/
+
+# Ignore log files
+# *.log
+
+# Ignore environment files
+.env
+
+# data files
+data/
+*.cpg
+*.dbf
+*.prj
+*.shp
+*.shx
+*.xml
+*.txt
+*.gpkg
+*.kmz
+*.cfg
+
+*.h5
+*.json
+
+*.csv
+*.xlsx
+
+*.pbf
+*.html
+*.log
+*.zip
+
+config_template_hyperparams.py
+*.png
+!mukara.png
