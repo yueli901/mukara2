@@ -6,8 +6,8 @@ import datetime
 import random
 
 from config import PATH, DATA, TRAINING
-from model.Mukara import Mukara
-from model.dataloader import load_grid_cells, load_gt
+from model.mukara import Mukara
+from model.dataloader import load_gt
 import model.utils as utils
 
 
@@ -35,11 +35,14 @@ class MukaraTrainer:
 
         # Initialize model and optimizer
         self.model = Mukara()
+        if TRAINING['load_model']:
+            _ = self.model("44")
+            self.model.load_weights(os.path.join(PATH["param"], TRAINING['load_model']))
         self.optimizer = tf.keras.optimizers.Adam(learning_rate=TRAINING['lr'])
 
-        self.id_to_gt, self.scaler = load_gt()
+        self.edge_to_gt, self.scaler = load_gt()
         self.train_ids, self.test_ids = utils.train_test_sampler(
-            list(self.id_to_gt.keys()), TRAINING['train_prop']
+            list(self.edge_to_gt.keys()), TRAINING['train_prop']
         )
 
     def compute_loss(self, gt, pred, traffic_loss_function):
@@ -53,40 +56,41 @@ class MukaraTrainer:
     def train_model(self):
         """
         Training loop for the Mukara model.
-        Evaluates the model every `TRAINING['eval_interval']` sensors trained.
+        Evaluates the model every `TRAINING['eval_interval']` edges trained.
         """
         for epoch in range(TRAINING['epoch']):
             random.shuffle(self.train_ids)
 
-            for i, sensor_id in enumerate(self.train_ids, start=1):
+            for i, edge_id in enumerate(self.train_ids, start=1):
                 with tf.GradientTape() as tape:
-                    pred = self.model(sensor_id)
-                    gt = tf.convert_to_tensor(self.id_to_gt[sensor_id], dtype=tf.float32)
-
-                    # Compute total loss
-                    loss = self.compute_loss(gt, pred, TRAINING['loss_function'])
+                    pred = self.model(edge_id)
+                    if pred:
+                        gt = tf.convert_to_tensor(self.edge_to_gt[edge_id], dtype=tf.float32)
+                        loss = self.compute_loss(gt, pred, TRAINING['loss_function'])
+                    else:
+                        continue
 
                 # Compute and apply gradients
                 grads = tape.gradient(loss, self.model.trainable_variables)
                 grads = [tf.clip_by_value(grad, -TRAINING['clip_gradient'], TRAINING['clip_gradient']) for grad in grads]
                 self.optimizer.apply_gradients(zip(grads, self.model.trainable_variables))
 
-                print(f"Training complete for epoch {epoch}, sensor {i}/{len(self.train_ids)}.")
+                print(f"Training complete for epoch {epoch}, step {i}/{len(self.train_ids)}.")
 
                 # Evaluate model periodically
                 if i % TRAINING['eval_interval'] == 0 or i == len(self.train_ids):
                     train_loss = self.evaluate_model(self.train_ids)
                     test_loss = self.evaluate_model(self.test_ids)
 
-                    logging.info(f"Epoch {epoch}, Sensor {i}: Train Loss: {self.format_loss(train_loss)}")
-                    logging.info(f"Epoch {epoch}, Sensor {i}: Valid Loss: {self.format_loss(test_loss)}")
+                    logging.info(f"Epoch {epoch}, step {i}: Train Loss: {self.format_loss(train_loss)}")
+                    logging.info(f"Epoch {epoch}, step {i}: Valid Loss: {self.format_loss(test_loss)}")
 
             # Save model weights
-            self.save_model()
+            self.save_model(epoch)
 
     def evaluate_model(self, ids):
         """
-        Evaluates the model on a subset of sensor IDs and logs all loss components.
+        Evaluates the model on a subset of edge IDs and logs all loss components.
         """
         sampled_ids = random.sample(ids, TRAINING['eval_samples'])
         loss = {}
@@ -94,9 +98,9 @@ class MukaraTrainer:
         for metric in TRAINING['eval_metrics']:
             loss[metric] = 0.0
 
-        for sensor_id in sampled_ids:
-            pred = self.model(sensor_id)
-            gt = tf.convert_to_tensor(self.id_to_gt[sensor_id], dtype=tf.float32)
+        for edge_id in sampled_ids:
+            pred = self.model(edge_id)
+            gt = tf.convert_to_tensor(self.edge_to_gt[edge_id], dtype=tf.float32)
 
             # Compute traffic loss using different evaluation metrics
             for metric in TRAINING['eval_metrics']:
@@ -117,12 +121,12 @@ class MukaraTrainer:
         """
         return ", ".join([f"{key}: {value:.6f}" for key, value in loss_dict.items()])
 
-    def save_model(self):
+    def save_model(self, epoch):
         """
         Saves the model weights.
         """
         formatted_time = datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
-        model_filename = os.path.join(PATH["param"], f"{formatted_time}.h5")
+        model_filename = os.path.join(PATH["param"], f"epoch{epoch}_{formatted_time}.weights.h5")
         self.model.save_weights(model_filename)
         print("Model saved successfully.")
 
@@ -149,8 +153,10 @@ class MukaraTrainer:
 
 
 if __name__ == '__main__':
+    print("Initiating model...")
     trainer = MukaraTrainer()
+    print("Training started...")
     trainer.train_model()
-    trainer.save_model()
+    trainer.save_model('final')
     print(trainer.model.summary())
     trainer.cleanup_and_log_config()

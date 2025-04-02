@@ -27,33 +27,39 @@ class Scaler:
 
 
 def MSE_Z(label_z, pred_z, scaler):
-    return tf.reduce_mean(tf.square(label_z - pred_z))
+    mse_z = tf.reduce_mean(tf.square(label_z - pred_z))
+    print(f"GT_Z: {label_z}, Pred_Z: {pred_z}, MSE_Z: {mse_z}")
+    return mse_z
 
 def MAE(label_z, pred_z, scaler):
     pred = scaler.inverse_transform(pred_z)
     label = scaler.inverse_transform(label_z)
-    return tf.reduce_mean(tf.abs(label - pred))
+    mae = tf.reduce_mean(tf.abs(label - pred))
+    print(f"GT: {label}, Pred: {pred}, MAE: {mae}")
+    return mae
 
 def MSE(label_z, pred_z, scaler):
     pred = scaler.inverse_transform(pred_z)
     label = scaler.inverse_transform(label_z)
-    return tf.reduce_mean(tf.square(label - pred))
+    mse = tf.reduce_mean(tf.square(label - pred))
+    print(f"GT: {label}, Pred: {pred}, MSE: {mse}")
+    return mse
 
 def MGEH(label_z, pred_z, scaler):
     pred = scaler.inverse_transform(pred_z)
     label = scaler.inverse_transform(label_z)
     gehs = tf.sqrt(2 * tf.square(pred - label) / (tf.abs(pred) + label + 1e-8))
-    print(f"GT: {label}, Pred: {pred}, GEH: {gehs}")
-    return tf.reduce_mean(gehs)
+    mgeh = tf.reduce_mean(gehs)
+    print(f"GT: {label}, Pred: {pred}, GEH: {mgeh}")
+    return mgeh
 
-
-def train_test_sampler(sensor_ids, true_probability):
+def train_test_sampler(edge_ids, true_probability):
     """
-    Splits sensor IDs into training and test sets based on probability.
+    Splits edge IDs into training and test sets based on probability.
     """
-    random.shuffle(sensor_ids)
-    train_ids = [sensor_id for sensor_id in sensor_ids if random.random() < true_probability]
-    test_ids = [sensor_id for sensor_id in sensor_ids if sensor_id not in train_ids]
+    random.shuffle(edge_ids)
+    train_ids = [edge_id for edge_id in edge_ids if random.random() < true_probability]
+    test_ids = [edge_id for edge_id in edge_ids if edge_id not in train_ids]
     return train_ids, test_ids
 
 def compute_feature_compact_loss(o_pixel_embeddings, d_pixel_embeddings, 
