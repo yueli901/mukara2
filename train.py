@@ -1,4 +1,4 @@
-import tensorflow as tf
+import torch
 import numpy as np
 import os
 import logging
@@ -6,20 +6,18 @@ import datetime
 import random
 
 from config import PATH, DATA, TRAINING
-from model.mukara import Mukara  # full-graph version
+from model.mukara import Mukara  # full-graph version (PyTorch)
 from model.dataloader import load_gt
 import model.utils as utils
-
 
 class MukaraTrainer:
     def __init__(self):
         # Set random seeds
         np.random.seed(TRAINING['seed'])
-        tf.random.set_seed(TRAINING['seed'])
+        torch.manual_seed(TRAINING['seed'])
         random.seed(TRAINING['seed'])
 
-        if not TRAINING['use_gpu']:
-            tf.config.set_visible_devices([], 'GPU')
+        self.device = torch.device("cuda" if (TRAINING['use_gpu'] and torch.cuda.is_available()) else "cpu")
 
         # Logging
         logging.basicConfig(
@@ -31,8 +29,8 @@ class MukaraTrainer:
 
         # Initialize model and optimizer
         print("Initializing model...")
-        self.model = Mukara()
-        self.optimizer = tf.keras.optimizers.Adam(learning_rate=TRAINING['lr'])
+        self.model = Mukara().to(self.device)
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=TRAINING['lr'])
         print("Model initialized successfully.")
 
         # Load GT and split
@@ -40,49 +38,63 @@ class MukaraTrainer:
         self.all_edge_ids = list(self.edge_to_gt.keys())
         self.train_ids, self.val_ids = utils.train_test_sampler(self.all_edge_ids, TRAINING['train_prop'])
 
-        # Build masks
-        eid_to_idx = {eid: idx for idx, eid in enumerate(self.model.edge_ids)}
-        self.train_mask = tf.convert_to_tensor([eid_to_idx[eid] for eid in self.train_ids], dtype=tf.int32)
-        self.val_mask = tf.convert_to_tensor([eid_to_idx[eid] for eid in self.val_ids], dtype=tf.int32)
+        # Build mapping from edge_id to DGL internal index
+        eid_to_idx = {str(eid): idx for idx, eid in enumerate(self.model.edge_ids)}
+        self.train_idx = torch.tensor([eid_to_idx[eid] for eid in self.train_ids], dtype=torch.long, device=self.device)
+        self.val_idx = torch.tensor([eid_to_idx[eid] for eid in self.val_ids], dtype=torch.long, device=self.device)
 
     def compute_loss(self, gt, pred, loss_function):
         return getattr(utils, loss_function)(gt, pred, self.scaler)
-
+    
     def train_model(self):
         for epoch in range(TRAINING['epoch']):
             logging.info(f"Epoch {epoch} started.")
 
-            with tf.GradientTape() as tape:
-                predictions = self.model(self.model.g.edata['feat'])  # Full graph prediction, shape [num_edges, 1]
+            self.model.train()
+            self.optimizer.zero_grad()
 
-                train_gt = tf.convert_to_tensor([self.edge_to_gt[str(eid)] for eid in self.train_ids], dtype=tf.float32)
-                train_pred = tf.gather(predictions, self.train_mask)
+            # Forward pass
+            predictions = self.model(self.model.g.edata['feat'].to(self.device))  # [num_edges, 1]
 
-                loss = self.compute_loss(train_gt, train_pred, TRAINING['loss_function'])
+            # Prepare ground truths and predicted values for training and evaluation
+            train_gt = torch.tensor([self.edge_to_gt[str(eid)] for eid in self.train_ids], dtype=torch.float32, device=self.device)
+            val_gt = torch.tensor([self.edge_to_gt[str(eid)] for eid in self.val_ids], dtype=torch.float32, device=self.device)
 
-            grads = tape.gradient(loss, self.model.trainable_variables)
-            grads = [tf.clip_by_value(g, -TRAINING['clip_gradient'], TRAINING['clip_gradient']) for g in grads]
-            self.optimizer.apply_gradients(zip(grads, self.model.trainable_variables))
+            train_pred = predictions[self.train_idx]
+            val_pred = predictions[self.val_idx]
 
-            logging.info(f"Epoch {epoch}: Train Loss: {loss.numpy():.6f}")
+            # Compute training loss and update
+            loss = self.compute_loss(train_gt, train_pred, TRAINING['loss_function'])
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), TRAINING['clip_gradient'])
+            self.optimizer.step()
 
-            if epoch % TRAINING['eval_interval'] == 0 or epoch == TRAINING['epoch'] - 1:
-                val_loss = self.evaluate_model()
-                logging.info(f"Epoch {epoch}: Validation Loss: {val_loss:.6f}")
+            # Additional training metrics
+            train_mse_z = utils.MSE_Z(train_gt, train_pred, self.scaler).item()
+            train_mae = utils.MAE(train_gt, train_pred, self.scaler).item()
+            train_geh = utils.MGEH(train_gt, train_pred, self.scaler).item()
 
-        self.save_model(epoch)
+            logging.info(
+                f"Epoch {epoch}: Train Loss ({TRAINING['loss_function']}): {loss.item():.6f}, "
+                f"MSE_Z: {train_mse_z:.6f}, MAE: {train_mae:.6f}, GEH: {train_geh:.6f}"
+            )
 
-    def evaluate_model(self):
-        predictions = self.model()
-        val_gt = tf.convert_to_tensor([self.edge_to_gt[str(eid)] for eid in self.val_ids], dtype=tf.float32)
-        val_pred = tf.gather(predictions, self.val_mask)
-        val_loss = self.compute_loss(val_gt, val_pred, TRAINING['loss_function'])
-        return val_loss.numpy()
+            # Evaluate
+            val_loss = self.compute_loss(val_gt, val_pred, TRAINING['loss_function']).item()
+            val_mse_z = utils.MSE_Z(val_gt, val_pred, self.scaler).item()
+            val_mae = utils.MAE(val_gt, val_pred, self.scaler).item()
+            val_geh = utils.MGEH(val_gt, val_pred, self.scaler).item()
+
+            logging.info(
+                f"Epoch {epoch}: Validation Loss ({TRAINING['loss_function']}): {val_loss:.6f}, "
+                f"MSE_Z: {val_mse_z:.6f}, MAE: {val_mae:.6f}, GEH: {val_geh:.6f}"
+            )
+
 
     def save_model(self, epoch):
         formatted_time = datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
-        model_filename = os.path.join(PATH["param"], f"epoch{epoch}_{formatted_time}.weights.h5")
-        self.model.save_weights(model_filename)
+        model_filename = os.path.join(PATH["param"], f"epoch{epoch}_{formatted_time}.pt")
+        torch.save(self.model.state_dict(), model_filename)
         print("Model saved successfully.")
 
     def cleanup_and_log_config(self):
@@ -100,7 +112,6 @@ class MukaraTrainer:
         with open(os.path.join(PATH["evaluate"], "training_log.log"), 'a') as log_file:
             log_file.write('\n\n# Contents of config.py\n')
             log_file.write(config_content)
-
 
 if __name__ == '__main__':
     print("Initiating model...")

@@ -32,7 +32,7 @@ TRAINING = {
     'use_gpu': True,
     'seed': 1,
     'lr': 1e-4,
-    'epoch': 5,
+    'epoch': 1,
     'clip_gradient': 5,
     'train_prop': 0.8,
     'loss_function': 'MSE_Z',
