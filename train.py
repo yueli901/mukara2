@@ -6,26 +6,22 @@ import datetime
 import random
 
 from config import PATH, DATA, TRAINING
-from model.mukara import Mukara
+from model.mukara import Mukara  # full-graph version
 from model.dataloader import load_gt
 import model.utils as utils
 
 
 class MukaraTrainer:
     def __init__(self):
-        """
-        Initializes the MukaraTrainer with model, optimizer, and logging configuration.
-        """
-        # Set random seeds for reproducibility
+        # Set random seeds
         np.random.seed(TRAINING['seed'])
         tf.random.set_seed(TRAINING['seed'])
         random.seed(TRAINING['seed'])
 
-        # Disable GPUs if required
-        if TRAINING['use_gpu'] == False:
+        if not TRAINING['use_gpu']:
             tf.config.set_visible_devices([], 'GPU')
 
-        # Configure logging
+        # Logging
         logging.basicConfig(
             filename=os.path.join(PATH["evaluate"], 'training_log.log'),
             level=logging.INFO,
@@ -34,114 +30,70 @@ class MukaraTrainer:
         )
 
         # Initialize model and optimizer
+        print("Initializing model...")
         self.model = Mukara()
         self.optimizer = tf.keras.optimizers.Adam(learning_rate=TRAINING['lr'])
+        print("Model initialized successfully.")
 
+        # Load GT and split
         self.edge_to_gt, self.scaler = load_gt()
-        self.train_ids, self.test_ids = utils.train_test_sampler(
-            list(self.edge_to_gt.keys()), TRAINING['train_prop']
-        )
+        self.all_edge_ids = list(self.edge_to_gt.keys())
+        self.train_ids, self.val_ids = utils.train_test_sampler(self.all_edge_ids, TRAINING['train_prop'])
 
-    def compute_loss(self, gt, pred, traffic_loss_function):
-        """
-        Computes the total loss with multiple components.
-        """
-        traffic_loss = getattr(utils, traffic_loss_function)(gt, pred, self.scaler)
-        
-        return traffic_loss
+        # Build masks
+        eid_to_idx = {eid: idx for idx, eid in enumerate(self.model.edge_ids)}
+        self.train_mask = tf.convert_to_tensor([eid_to_idx[eid] for eid in self.train_ids], dtype=tf.int32)
+        self.val_mask = tf.convert_to_tensor([eid_to_idx[eid] for eid in self.val_ids], dtype=tf.int32)
+
+    def compute_loss(self, gt, pred, loss_function):
+        return getattr(utils, loss_function)(gt, pred, self.scaler)
 
     def train_model(self):
-        """
-        Training loop for the Mukara model.
-        Evaluates the model every `TRAINING['eval_interval']` edges trained.
-        """
         for epoch in range(TRAINING['epoch']):
-            random.shuffle(self.train_ids)
+            logging.info(f"Epoch {epoch} started.")
 
-            for i, edge_id in enumerate(self.train_ids, start=1):
-                logging.info(f'Training started for epoch {epoch}, step {i}/{len(self.train_ids)}.')
-                with tf.GradientTape() as tape:
-                    pred = self.model(edge_id)
-                    if pred:
-                        gt = tf.convert_to_tensor(self.edge_to_gt[edge_id], dtype=tf.float32)
-                        loss = self.compute_loss(gt, pred, TRAINING['loss_function'])
-                    else:
-                        continue
+            with tf.GradientTape() as tape:
+                predictions = self.model(self.model.g.edata['feat'])  # Full graph prediction, shape [num_edges, 1]
 
-                # Compute and apply gradients
-                grads = tape.gradient(loss, self.model.trainable_variables)
-                grads = [tf.clip_by_value(grad, -TRAINING['clip_gradient'], TRAINING['clip_gradient']) for grad in grads]
-                self.optimizer.apply_gradients(zip(grads, self.model.trainable_variables))
+                train_gt = tf.convert_to_tensor([self.edge_to_gt[str(eid)] for eid in self.train_ids], dtype=tf.float32)
+                train_pred = tf.gather(predictions, self.train_mask)
 
-                logging.info(f"Training complete for epoch {epoch}, step {i}/{len(self.train_ids)}.")
+                loss = self.compute_loss(train_gt, train_pred, TRAINING['loss_function'])
 
-                # Evaluate model periodically
-                if i % TRAINING['eval_interval'] == 0 or i == len(self.train_ids):
-                    train_loss = self.evaluate_model(self.train_ids)
-                    test_loss = self.evaluate_model(self.test_ids)
+            grads = tape.gradient(loss, self.model.trainable_variables)
+            grads = [tf.clip_by_value(g, -TRAINING['clip_gradient'], TRAINING['clip_gradient']) for g in grads]
+            self.optimizer.apply_gradients(zip(grads, self.model.trainable_variables))
 
-                    logging.info(f"Epoch {epoch}, step {i}: Train Loss: {self.format_loss(train_loss)}")
-                    logging.info(f"Epoch {epoch}, step {i}: Valid Loss: {self.format_loss(test_loss)}")
+            logging.info(f"Epoch {epoch}: Train Loss: {loss.numpy():.6f}")
 
-            # Save model weights
-            self.save_model(epoch)
+            if epoch % TRAINING['eval_interval'] == 0 or epoch == TRAINING['epoch'] - 1:
+                val_loss = self.evaluate_model()
+                logging.info(f"Epoch {epoch}: Validation Loss: {val_loss:.6f}")
 
-    def evaluate_model(self, ids):
-        """
-        Evaluates the model on a subset of edge IDs and logs all loss components.
-        """
-        sampled_ids = random.sample(ids, min(TRAINING['eval_samples'], len(ids)))
-        loss = {}
+        self.save_model(epoch)
 
-        for metric in TRAINING['eval_metrics']:
-            loss[metric] = 0.0
-
-        for edge_id in sampled_ids:
-            pred = self.model(edge_id)
-            gt = tf.convert_to_tensor(self.edge_to_gt[edge_id], dtype=tf.float32)
-
-            # Compute traffic loss using different evaluation metrics
-            for metric in TRAINING['eval_metrics']:
-                traffic_loss = self.compute_loss(gt, pred, metric)
-                loss[metric] += traffic_loss.numpy()
-
-        # Normalize by the number of evaluated samples
-        num_samples = len(sampled_ids)
-        for key in loss.keys():
-            loss[key] /= num_samples
-
-        return loss
-
-    @staticmethod
-    def format_loss(loss_dict):
-        """
-        Formats the loss dictionary into a readable string with .6f precision.
-        """
-        return ", ".join([f"{key}: {value:.6f}" for key, value in loss_dict.items()])
+    def evaluate_model(self):
+        predictions = self.model()
+        val_gt = tf.convert_to_tensor([self.edge_to_gt[str(eid)] for eid in self.val_ids], dtype=tf.float32)
+        val_pred = tf.gather(predictions, self.val_mask)
+        val_loss = self.compute_loss(val_gt, val_pred, TRAINING['loss_function'])
+        return val_loss.numpy()
 
     def save_model(self, epoch):
-        """
-        Saves the model weights.
-        """
         formatted_time = datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
         model_filename = os.path.join(PATH["param"], f"epoch{epoch}_{formatted_time}.weights.h5")
         self.model.save_weights(model_filename)
         print("Model saved successfully.")
 
     def cleanup_and_log_config(self):
-        """
-        Clears the cache if enabled and logs the configuration.
-        """
         if DATA['clear_cache']:
             for filename in os.listdir(PATH['cache']):
                 os.remove(os.path.join(PATH['cache'], filename))
 
-        # Close logging handlers
         for handler in logging.root.handlers[:]:
             handler.close()
             logging.root.removeHandler(handler)
 
-        # Append model configuration to log file
         with open('config.py', 'r') as config_file:
             config_content = config_file.read()
 
@@ -156,5 +108,4 @@ if __name__ == '__main__':
     print("Training started...")
     trainer.train_model()
     trainer.save_model('final')
-    print(trainer.model.summary())
     trainer.cleanup_and_log_config()

@@ -5,8 +5,9 @@ PATH = {
     'graph_nodes': 'data/highway_network/england_wales_nodes_27700.json',
     'graph_edges': 'data/highway_network/england_wales_edges_27700.json',
     'nodes': 'data/highway_network/nodes.json',
-    'edges': 'data/highway_network/edge_features.json',
+    'edge_features': 'data/highway_network/edge_features.json',
     'mesh2nodes': 'data/highway_network/mesh_nodes_pairing.json',
+    'mesh2edges': 'data/highway_network/mesh_edges_pairing.json',
     'cache': 'data/cache',
     'population_and_employment': 'data/population_and_employment/population_and_employment.h5',
     'landuse_and_poi': 'data/landuse_poi/landuse_and_poi-230101.h5',
@@ -23,12 +24,12 @@ DATA = {
 
 MODEL = {
     'embedding_dim': 128,
-    'graph_size': 64, # degrees of neighbours
+    'gnn_layers': 64, # degrees of neighbours
     'attention_heads': 3,
     }
 
 TRAINING = {
-    'use_gpu': False,
+    'use_gpu': True,
     'seed': 1,
     'lr': 1e-4,
     'epoch': 5,
@@ -36,6 +37,5 @@ TRAINING = {
     'train_prop': 0.8,
     'loss_function': 'MSE_Z',
     'eval_metrics': ['MGEH', 'MAE'],
-    'eval_samples': 100,
-    'eval_interval': 1000,
+    'eval_interval': 1,
     }

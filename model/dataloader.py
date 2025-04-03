@@ -9,6 +9,7 @@ import geopandas as gpd
 import json
 import pyproj
 import osmnx as ox
+import dgl
 
 
 from model.utils import Scaler
@@ -100,19 +101,44 @@ def load_gt():
 
     return edge_to_gt, scaler
 
-def load_graph():
+def load_dgl_graph():
     """
-    Rebuild the graph from the geojson file of nodes and edges.
+    Builds a DGL graph from GeoDataFrames and attaches edge features computed from structural attributes and aggregated pixel-level data.
+    Returns the graph and a list of external edge_ids (globally consistent in this project) in the sequence of DGL internal edge order.
     """
+    # Load node and edge GeoDataFrames
     nodes = gpd.read_file(PATH['graph_nodes'])
     edges = gpd.read_file(PATH['graph_edges'])
 
-    # If the index is a simple integer index, fix it:
-    if not isinstance(edges.index, pd.MultiIndex):
-        # Ensure columns 'u', 'v', and 'key' exist
-        if {'u', 'v', 'key'}.issubset(edges.columns):
-            edges.set_index(['u', 'v', 'key'], inplace=True)
-    print(edges.index)
-    
-    graph = ox.graph_from_gdfs(nodes, edges)
-    return graph
+    edges.set_index(['u', 'v', 'key'], inplace=True)
+
+    # Load edge features from JSON
+    with open(PATH['edge_features'], 'r') as f:
+        edge_feature_dict = json.load(f)
+
+    # Load mesh features and pixel-to-edge mapping
+    mesh_feats = load_mesh_features()
+    with open(PATH['mesh2edges'], 'r') as f:
+        mesh_map = json.load(f)
+
+    # Build full graph with edge_id as edge attribute
+    graph_nx = ox.graph_from_gdfs(nodes, edges)
+    g = dgl.from_networkx(graph_nx, edge_attrs=['edge_id'])
+
+    # Retrieve edge_ids in DGL's internal order
+    edge_ids = g.edata['edge_id'].numpy().tolist()
+    edge_features = []
+
+    for eid in tqdm(edge_ids, desc="Processing edge features"):
+        eid_str = str(eid)
+        base_feat = edge_feature_dict[eid_str]['feature']
+        pixel_ids = mesh_map.get(eid_str, [])
+        pixel_embs = [mesh_feats[i // mesh_feats.shape[1], i % mesh_feats.shape[1], :] for i in pixel_ids]
+        pixel_sum = np.sum(pixel_embs, axis=0) if pixel_embs else np.zeros_like(mesh_feats[0, 0, :])
+        final_feat = np.concatenate([base_feat, pixel_sum])
+        edge_features.append(final_feat)
+
+    edge_features = tf.convert_to_tensor(np.stack(edge_features), dtype=tf.float32)
+    g.edata['feat'] = edge_features
+
+    return g, edge_ids
