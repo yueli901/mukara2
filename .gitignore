@@ -28,6 +28,7 @@ data/
 *.cfg
 
 *.h5
+*.pt
 *.json
 
 *.csv
