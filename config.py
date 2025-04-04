@@ -24,15 +24,15 @@ DATA = {
 
 MODEL = {
     'embedding_dim': 128,
-    'gnn_layers': 64, # degrees of neighbours
-    'attention_heads': 3,
+    'gnn_layers': 16, # degrees of neighbours
+    'attention_heads': 4,
     }
 
 TRAINING = {
     'use_gpu': True,
     'seed': 1,
     'lr': 1e-4,
-    'epoch': 1,
+    'epoch': 100,
     'clip_gradient': 5,
     'train_prop': 0.8,
     'loss_function': 'MSE_Z',
