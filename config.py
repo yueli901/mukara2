@@ -29,7 +29,7 @@ MODEL = {
     }
 
 TRAINING = {
-    'use_gpu': True,
+    'use_gpu': False,
     'seed': 1,
     'lr': 1e-4,
     'epoch': 100,

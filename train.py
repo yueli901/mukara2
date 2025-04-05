@@ -16,8 +16,9 @@ class MukaraTrainer:
         np.random.seed(TRAINING['seed'])
         torch.manual_seed(TRAINING['seed'])
         random.seed(TRAINING['seed'])
-
+        
         self.device = torch.device("cuda" if (TRAINING['use_gpu'] and torch.cuda.is_available()) else "cpu")
+        print(self.device)
 
         # Logging
         logging.basicConfig(

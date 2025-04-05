@@ -22,7 +22,7 @@ class Mukara(nn.Module):
             self.edge_feature_dict = json.load(f)
         with open(PATH['mesh2nodes'], 'r') as f:
             self.mesh2nodes = json.load(f)
-        
+
         self.node_dim = self.mesh_flat.shape[1]
         self.edge_dim = len(next(iter(self.edge_feature_dict.values()))["feature"])
         self.feature_dim = max(self.node_dim, self.edge_dim)  # unified feature dim
@@ -55,7 +55,7 @@ class Mukara(nn.Module):
         )
 
         self.output_mlp = nn.Sequential(
-            nn.Linear(self.embedding_dim *2 , 128),
+            nn.Linear(self.embedding_dim * 2, 128),
             nn.ReLU(),
             nn.Linear(128, 1)
         )
@@ -64,6 +64,8 @@ class Mukara(nn.Module):
         g, center_node_ids = self.build_dgl_subgraph_from_json(edge_id)
         if g is None:
             return None
+
+        g = g.to(next(self.parameters()).device)  # Ensure graph is on same device as model
 
         # Add normalized degree to feature
         deg_norm = g.ndata['degree'].float().unsqueeze(1) / MODEL['graph_size']
@@ -81,43 +83,37 @@ class Mukara(nn.Module):
 
         max_deg = g.ndata['degree'].max().item()
         for d in reversed(range(max_deg + 1)):
-            # Mask for node → edge updates
-            node2edge_mask = (g.ndata['degree'] == d) & (g.ndata['type'] == 1)  # update edges
-            edge2node_mask = (g.ndata['degree'] == d) & (g.ndata['type'] == 0)  # update nodes
+            node2edge_mask = (g.ndata['degree'] == d) & (g.ndata['type'] == 1)
+            edge2node_mask = (g.ndata['degree'] == d) & (g.ndata['type'] == 0)
 
-            # === Node → Edge ===
+            # Node → Edge
             g.update_all(
                 message_func=fn.copy_u('h', 'm'),
                 reduce_func=fn.sum('m', 'agg_msg')
             )
-
             if 'agg_msg' in g.ndata:
                 agg_msg = g.ndata['agg_msg']
                 updated = self.node_to_edge(torch.cat([agg_msg, g.ndata['h']], dim=-1))
                 g.ndata['h'] = torch.where(node2edge_mask.unsqueeze(1), updated, g.ndata['h'])
 
-            # === Edge → Node ===
+            # Edge → Node
             g.update_all(
                 message_func=fn.copy_u('h', 'm'),
                 reduce_func=fn.sum('m', 'agg_msg')
             )
-
             if 'agg_msg' in g.ndata:
                 agg_msg = g.ndata['agg_msg']
                 updated = self.edge_to_node(torch.cat([agg_msg, g.ndata['h']], dim=-1))
                 g.ndata['h'] = torch.where(edge2node_mask.unsqueeze(1), updated, g.ndata['h'])
 
-        # === Final prediction ===
+        # Final prediction
         center_edge_idx = g.num_nodes() - 1
         center_edge_emb = g.ndata['h'][center_edge_idx]
-
         center_node_embs = g.ndata['h'][center_node_ids]
         node_sum = torch.sum(center_node_embs, dim=0)
-
         final_input = torch.cat([center_edge_emb, node_sum], dim=-1)
-        z_pred = self.output_mlp(final_input).squeeze(-1)
-        return F.softplus(z_pred - self.z_shift) + self.z_shift
 
+        return self.output_mlp(final_input).squeeze(-1)
 
     def build_dgl_subgraph_from_json(self, edge_id):
         path = os.path.join(PATH['cache'], f"{edge_id}.json")
@@ -126,14 +122,14 @@ class Mukara(nn.Module):
             return None
 
         with open(path, 'r') as f:
-            subgraph = json.load(f)        
+            subgraph = json.load(f)
 
         id_map = {}
         current_idx = 0
 
         features = []
         degrees = []
-        types = [] # 'node', 'edge', or 'center_edge'
+        types = []
         src_list = []
         dst_list = []
         center_node_keys = []
@@ -150,7 +146,6 @@ class Mukara(nn.Module):
                 nid = conn['node']
                 eid = conn['edge']
 
-                # Node
                 node_key = f"n{nid}"
                 if node_key not in id_map:
                     id_map[node_key] = current_idx
@@ -166,7 +161,6 @@ class Mukara(nn.Module):
                     types.append(0)
                     current_idx += 1
 
-                # Edge
                 edge_key = f"e{eid}"
                 if edge_key not in id_map:
                     id_map[edge_key] = current_idx
@@ -177,7 +171,6 @@ class Mukara(nn.Module):
                     types.append(1)
                     current_idx += 1
 
-                # node → edge
                 src_list.append(id_map[node_key])
                 dst_list.append(id_map[edge_key])
 
@@ -211,16 +204,14 @@ class Mukara(nn.Module):
                         types.append(1)
                         current_idx += 1
 
-                    # edge → node
                     src_list.append(id_map[edge_key])
                     dst_list.append(id_map[node_key])
 
-        # === Add the center edge as a DGL node ===
         center_edge_feat = torch.tensor(self.edge_feature_dict[str(edge_id)]["feature"], dtype=torch.float32)
         padded_feat = torch.nn.functional.pad(center_edge_feat, (0, self.feature_dim - self.edge_dim))
         features.append(padded_feat)
-        degrees.append(0)       # Always degree 0
-        types.append(1)         # Same type as regular edges
+        degrees.append(0)
+        types.append(1)
         id_map[f"e{edge_id}"] = current_idx
         current_idx += 1
 
