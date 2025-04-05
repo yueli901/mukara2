@@ -29,10 +29,8 @@ class MukaraTrainer:
         )
 
         # Initialize model and optimizer
-        print("Initializing model...")
         self.model = Mukara().to(self.device)
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=TRAINING['lr'])
-        print("Model initialized successfully.")
 
         # Load GT and split
         self.edge_to_gt, self.scaler = load_gt()
