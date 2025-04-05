@@ -6,7 +6,7 @@ import datetime
 import random
 
 from config import PATH, DATA, TRAINING
-from model.mukara import Mukara  # full-graph version (PyTorch)
+from model.mukara import Mukara  # subgraph-based PyTorch+DGL model
 from model.dataloader import load_gt
 import model.utils as utils
 
@@ -35,60 +35,86 @@ class MukaraTrainer:
 
         # Load GT and split
         self.edge_to_gt, self.scaler = load_gt()
+        self.model.z_shift = (-self.scaler.mean / (self.scaler.std + 1e-8)).item()
         self.all_edge_ids = list(self.edge_to_gt.keys())
         self.train_ids, self.val_ids = utils.train_test_sampler(self.all_edge_ids, TRAINING['train_prop'])
 
-        # Build mapping from edge_id to DGL internal index
-        eid_to_idx = {str(eid): idx for idx, eid in enumerate(self.model.edge_ids)}
-        self.train_idx = torch.tensor([eid_to_idx[eid] for eid in self.train_ids], dtype=torch.long, device=self.device)
-        self.val_idx = torch.tensor([eid_to_idx[eid] for eid in self.val_ids], dtype=torch.long, device=self.device)
-
     def compute_loss(self, gt, pred, loss_function):
         return getattr(utils, loss_function)(gt, pred, self.scaler)
-    
+
     def train_model(self):
         for epoch in range(TRAINING['epoch']):
             logging.info(f"Epoch {epoch} started.")
-
             self.model.train()
-            self.optimizer.zero_grad()
+            random.shuffle(self.train_ids)
 
-            # Forward pass
-            predictions = self.model(self.model.g.edata['feat'].to(self.device))  # [num_edges, 1]
+            total_loss = 0.0
+            train_preds, train_gts = [], []
 
-            # Prepare ground truths and predicted values for training and evaluation
-            train_gt = torch.tensor([self.edge_to_gt[str(eid)] for eid in self.train_ids], dtype=torch.float32, device=self.device)
-            val_gt = torch.tensor([self.edge_to_gt[str(eid)] for eid in self.val_ids], dtype=torch.float32, device=self.device)
+            for step, edge_id in enumerate(self.train_ids):
+                gt = self.edge_to_gt[edge_id]
+                pred = self.model(edge_id)
+                if pred is None or pred.numel() == 0:
+                    continue
 
-            train_pred = predictions[self.train_idx]
-            val_pred = predictions[self.val_idx]
+                gt_tensor = torch.tensor([gt], dtype=torch.float32, device=self.device)
+                pred = pred.to(self.device)
 
-            # Compute training loss and update
-            loss = self.compute_loss(train_gt, train_pred, TRAINING['loss_function'])
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), TRAINING['clip_gradient'])
-            self.optimizer.step()
+                loss = self.compute_loss(gt_tensor, pred, TRAINING['loss_function'])
+                self.optimizer.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), TRAINING['clip_gradient'])
+                self.optimizer.step()
 
-            # Additional training metrics
-            train_mse_z = utils.MSE_Z(train_gt, train_pred, self.scaler).item()
-            train_mae = utils.MAE(train_gt, train_pred, self.scaler).item()
-            train_geh = utils.MGEH(train_gt, train_pred, self.scaler).item()
+                train_preds.append(pred.detach())
+                train_gts.append(gt_tensor)
+                total_loss += loss.item()
 
-            logging.info(
-                f"Epoch {epoch}: Train Loss ({TRAINING['loss_function']}): {loss.item():.6f}, "
-                f"MSE_Z: {train_mse_z:.6f}, MAE: {train_mae:.6f}, GEH: {train_geh:.6f}"
-            )
+                mse_z = utils.MSE_Z(gt_tensor, pred, self.scaler).item()
+                mae = utils.MAE(gt_tensor, pred, self.scaler).item()
+                geh = utils.MGEH(gt_tensor, pred, self.scaler).item()
 
-            # Evaluate
-            val_loss = self.compute_loss(val_gt, val_pred, TRAINING['loss_function']).item()
-            val_mse_z = utils.MSE_Z(val_gt, val_pred, self.scaler).item()
-            val_mae = utils.MAE(val_gt, val_pred, self.scaler).item()
-            val_geh = utils.MGEH(val_gt, val_pred, self.scaler).item()
+                real_gt = self.scaler.inverse_transform(gt_tensor).item()
+                real_pred = self.scaler.inverse_transform(pred).item()
+                logging.info(
+                    f"Epoch {epoch} Step {step}: Train Edge {edge_id}, MSE_Z: {mse_z:.6f}, MAE: {mae:.2f}, GEH: {geh:.2f}, "
+                    f"GT: {real_gt:.2f}, Pred: {real_pred:.2f}"
+                )
 
-            logging.info(
-                f"Epoch {epoch}: Validation Loss ({TRAINING['loss_function']}): {val_loss:.6f}, "
-                f"MSE_Z: {val_mse_z:.6f}, MAE: {val_mae:.6f}, GEH: {val_geh:.6f}"
-            )
+                # Evaluation interval
+                if (step + 1) % TRAINING['eval_interval'] == 0:
+                    self.evaluate_random_sample(epoch, step)
+
+            # Final evaluation at end of epoch
+            self.evaluate_random_sample(epoch, 'end')
+
+    def evaluate_random_sample(self, epoch, step):
+        self.model.eval()
+        with torch.no_grad():
+            sample_train = random.sample(self.train_ids, min(TRAINING['eval_sample'], len(self.train_ids)))
+            sample_val = random.sample(self.val_ids, min(TRAINING['eval_sample'], len(self.val_ids)))
+
+            for split, sample_ids in [('Train', sample_train), ('Validation', sample_val)]:
+                preds, gts = [], []
+                for edge_id in sample_ids:
+                    gt = self.edge_to_gt[edge_id]
+                    pred = self.model(edge_id)
+                    if pred is None or pred.numel() == 0:
+                        continue
+                    preds.append(pred)
+                    gts.append(torch.tensor([gt], dtype=torch.float32, device=self.device))
+
+                if preds:
+                    preds = torch.cat(preds)
+                    gts = torch.cat(gts)
+
+                    mse_z = utils.MSE_Z(gts, preds, self.scaler).item()
+                    mae = utils.MAE(gts, preds, self.scaler).item()
+                    geh = utils.MGEH(gts, preds, self.scaler).item()
+
+                    logging.info(
+                        f"Epoch {epoch} Step {step} {split} Eval: MSE_Z: {mse_z:.6f}, MAE: {mae:.6f}, GEH: {geh:.6f}"
+                    )
 
 
     def save_model(self, epoch):

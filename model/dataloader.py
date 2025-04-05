@@ -10,6 +10,7 @@ import json
 import pyproj
 import osmnx as ox
 import dgl
+import networkx as nx
 
 from model.utils import Scaler
 from config import PATH, DATA, TRAINING
@@ -73,35 +74,3 @@ def load_gt():
     edge_to_gt = {str(eid): val for eid, val in zip(edge_ids, traffic_volume_normalized.cpu().numpy())}
 
     return edge_to_gt, scaler
-
-def load_dgl_graph():
-    nodes = gpd.read_file(PATH['graph_nodes'])
-    edges = gpd.read_file(PATH['graph_edges'])
-
-    edges.set_index(['u', 'v', 'key'], inplace=True)
-
-    with open(PATH['edge_features'], 'r') as f:
-        edge_feature_dict = json.load(f)
-
-    mesh_feats = load_mesh_features()
-    with open(PATH['mesh2edges'], 'r') as f:
-        mesh_map = json.load(f)
-
-    graph_nx = ox.graph_from_gdfs(nodes, edges)
-    g = dgl.from_networkx(graph_nx, edge_attrs=['edge_id'])
-
-    edge_ids = g.edata['edge_id'].numpy().tolist()
-    edge_features = []
-
-    for eid in tqdm(edge_ids, desc="Processing edge features"):
-        eid_str = str(eid)
-        base_feat = edge_feature_dict[eid_str]['feature']
-        pixel_ids = mesh_map.get(eid_str, [])
-        pixel_embs = [mesh_feats[i // mesh_feats.shape[1], i % mesh_feats.shape[1], :] for i in pixel_ids]
-        pixel_sum = torch.sum(torch.stack(pixel_embs), dim=0) if pixel_embs else torch.zeros_like(mesh_feats[0, 0, :])
-        final_feat = torch.tensor(np.concatenate([base_feat, pixel_sum.numpy()]), dtype=torch.float32)
-        edge_features.append(final_feat)
-
-    g.edata['feat'] = torch.stack(edge_features)
-
-    return g, edge_ids

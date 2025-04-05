@@ -1,6 +1,5 @@
 PATH = {
     'param': 'param',
-    'data': 'data',
     'mesh': 'data/population_and_employment/grid_1km_653_573/grid_cells.shp',
     'graph_nodes': 'data/highway_network/england_wales_nodes_27700.json',
     'graph_edges': 'data/highway_network/england_wales_edges_27700.json',
@@ -23,9 +22,10 @@ DATA = {
 }
 
 MODEL = {
-    'embedding_dim': 128,
+    'embedding_dim': 512,
     'gnn_layers': 16, # degrees of neighbours
     'attention_heads': 4,
+    'graph_size': 64,
     }
 
 TRAINING = {
@@ -37,5 +37,6 @@ TRAINING = {
     'train_prop': 0.8,
     'loss_function': 'MSE_Z',
     'eval_metrics': ['MGEH', 'MAE'],
-    'eval_interval': 1,
+    'eval_interval': 1000,
+    'eval_sample': 100,
     }
