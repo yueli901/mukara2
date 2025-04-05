@@ -151,7 +151,7 @@ class Mukara(nn.Module):
                     id_map[node_key] = current_idx
                     pixel_ids = self.mesh2nodes.get(str(nid), [])
                     if pixel_ids:
-                        feats = [torch.tensor(self.mesh_flat[i], dtype=torch.float32) for i in pixel_ids]
+                        feats = [self.mesh_flat[i].clone().detach() for i in pixel_ids]
                         feat = torch.sum(torch.stack(feats), dim=0)
                     else:
                         feat = torch.zeros((self.node_dim,), dtype=torch.float32)
@@ -183,7 +183,7 @@ class Mukara(nn.Module):
                     id_map[node_key] = current_idx
                     pixel_ids = self.mesh2nodes.get(str(nid), [])
                     if pixel_ids:
-                        feats = [torch.tensor(self.mesh_flat[i], dtype=torch.float32) for i in pixel_ids]
+                        feats = [self.mesh_flat[i].clone().detach() for i in pixel_ids]
                         feat = torch.sum(torch.stack(feats), dim=0)
                     else:
                         feat = torch.zeros((self.node_dim,), dtype=torch.float32)

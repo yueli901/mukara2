@@ -1,0 +1,20 @@
+name: dgl-env
+channels:
+  - dglteam
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - cpuonly
+  - numpy=1.25.2
+  - pandas=2.1.4
+  - geopandas=0.14.3
+  - osmnx=1.9.1
+  - h5py=3.9.0
+  - hdf5=1.14.2
+  - networkx=3.2
+  - shapely=2.0.2
+  - fiona=1.9.5
+  - pyproj=3.6.1
+  - pytorch=2.1.0
+  - dgl=1.1.2
